@@ -1,0 +1,100 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: yuyue-backend
+  datasource:
+    url: jdbc:mariadb://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/yuyue?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:123}
+    driver-class-name: org.mariadb.jdbc.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+  # Flyway 负责建表；数据库由上面的 createDatabaseIfNotExist=true 自动创建
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    encoding: UTF-8
+    # 已有表但无迁移记录时自动建立基线，避免报 "non-empty schema but no schema history table"
+    baseline-on-migrate: true
+    validate-on-migrate: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+    consumer:
+      group-id: yuyue-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.yuyue.*
+    listener:
+      ack-mode: record
+  # 热部署（仅开发期；生产 jar 不含 devtools，自动失效）
+  devtools:
+    restart:
+      enabled: true
+      # 观察 target/classes 的变更，IDE 编译（Ctrl+F9）后即触发重启
+      poll-interval: 2s
+      quiet-period: 1s
+    livereload:
+      enabled: true
+
+# Swagger UI: http://localhost:8080/swagger-ui.html   OpenAPI JSON: /v3/api-docs
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha          # 接口按标签字母序
+    operations-sorter: method   # 接口按请求方法排序
+    display-request-duration: true
+    doc-expansion: none         # 默认折叠，接口多时更清爽
+    persist-authorization: true # Authorize 里填的 token 写入 localStorage，刷新页面不丢
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+yuyue:
+  swagger:
+    auto-auth:
+      # 给 Swagger UI 注入自动登录脚本：登录成功后自动持有 JWT
+      enabled: ${SWAGGER_AUTO_AUTH:true}
+  jwt:
+    secret: ${JWT_SECRET:yuyue-dev-secret-key-change-in-production-0123456789}
+    expire-hours: 72
+  wx:
+    # 微信小程序：填上真实 appid / secret 才能真机登录；留空时只能用 mock code 联调
+    appid: ${WX_APPID:}
+    secret: ${WX_SECRET:}
+    mock-enabled: ${WX_MOCK_ENABLED:true}
+  elo:
+    default-rating: 1200
+    k-new: 40       # ≤20 场
+    k-mid: 24       # 21-60 场
+    k-pro: 16       # >60 场

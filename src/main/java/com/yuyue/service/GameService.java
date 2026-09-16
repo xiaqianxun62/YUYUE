@@ -6,6 +6,7 @@ import com.yuyue.common.ErrorCode;
 import com.yuyue.dto.ArrangeRequest;
 import com.yuyue.dto.ArrangeResponse;
 import com.yuyue.dto.GameCreateRequest;
+import com.yuyue.dto.GameRegisterRequest;
 import com.yuyue.dto.GameResponse;
 import com.yuyue.engine.ArrangeEngine;
 import com.yuyue.engine.ArrangeEngine.ArrangeResult;
@@ -13,6 +14,7 @@ import com.yuyue.engine.ArrangeEngine.Player;
 import com.yuyue.entity.Game;
 import com.yuyue.entity.Registration;
 import com.yuyue.entity.User;
+import com.yuyue.event.RegistrationCancelEvent;
 import com.yuyue.event.RegistrationEvent;
 import com.yuyue.exception.BizException;
 import com.yuyue.mapper.GameMapper;
@@ -26,6 +28,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
+import com.yuyue.web.UserContext;
 
 @Slf4j
 @Service
@@ -68,10 +75,12 @@ public class GameService {
     }
 
     /**
-     * 匿名报名：校验满员/重复，落库 + Redis 计数 + 发 Kafka 报名事件（机器人消费后同步微信群接龙）
+     * 报名：校验满员/重复，落库 + Redis 计数 + 发 Kafka 报名事件（机器人消费后同步微信群接龙）
+     *
+     * @param req 为空或 anonymous=true → 匿名报名（默认）；anonymous=false → 实名报名
      */
     @Transactional
-    public GameResponse register(Long userId, Long gameId) {
+    public GameResponse register(Long userId, Long gameId, GameRegisterRequest req) {
         Game game = requireGame(gameId);
         if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
             throw new BizException(ErrorCode.GAME_STATUS_ERROR);
@@ -93,23 +102,74 @@ public class GameService {
             throw new BizException(ErrorCode.USER_NOT_FOUND);
         }
 
+        boolean anonymous = req == null || req.isAnonymous();
+        if (!anonymous && (user.getName() == null || user.getName().isBlank())) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "请先完善姓名后再实名报名");
+        }
+
         Registration reg = new Registration();
         reg.setGameId(gameId);
         reg.setUserId(userId);
         reg.setGender(user.getGender());
         reg.setRating(user.getRating());
+        reg.setAnonymous(anonymous ? Constants.ANONYMOUS_YES : Constants.ANONYMOUS_NO);
         registrationMapper.insert(reg);
 
         // Redis 计数（计数器作热点读缓存）
         redisTemplate.opsForHash().increment(Constants.GAME_REG_COUNT,
                 String.valueOf(gameId), 1);
 
-        // Kafka 报名事件 → 机器人同步微信群接龙
-        eventProducer.sendRegistration(RegistrationEvent.of(
-                gameId, userId, UserService.anonymousName(userId), user.getGender()));
+        // Kafka 报名事件 → 机器人同步微信群接龙（实名报名接龙里显示真实姓名）
+        String displayName = anonymous ? UserService.anonymousName(userId) : user.getName();
+        eventProducer.sendRegistration(
+                RegistrationEvent.of(gameId, userId, displayName, user.getGender(), anonymous));
 
-        log.info("报名成功: game={}, user={}", gameId, userId);
+        log.info("报名成功: game={}, user={}, {}", gameId, userId, anonymous ? "匿名" : "实名");
         return buildGameResponse(game);
+    }
+
+    /**
+     * 取消报名：仅「报名中」的球局可取消，删记录 + Redis 计数 -1 + 发 Kafka 取消事件
+     * （机器人消费后把该人从群接龙移除）
+     */
+    @Transactional
+    public GameResponse cancelRegister(Long userId, Long gameId) {
+        Game game = requireGame(gameId);
+        if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
+            throw new BizException(ErrorCode.GAME_STATUS_ERROR, "球局已编排或已结束，无法取消报名");
+        }
+        Registration reg = registrationMapper.selectOne(new LambdaQueryWrapper<Registration>()
+                .eq(Registration::getGameId, gameId)
+                .eq(Registration::getUserId, userId));
+        if (reg == null) {
+            throw new BizException(ErrorCode.NOT_REGISTERED);
+        }
+        registrationMapper.deleteById(reg.getId());
+
+        // Redis 计数 -1（计数与实际不一致时兜底到 0，不出现负数）
+        Long left = redisTemplate.opsForHash()
+                .increment(Constants.GAME_REG_COUNT, String.valueOf(gameId), -1);
+        if (left != null && left < 0) {
+            redisTemplate.opsForHash().put(Constants.GAME_REG_COUNT, String.valueOf(gameId), "0");
+        }
+
+        // 用报名时的称呼发取消事件：实名报名者用真名，机器人才能对上接龙里的那一条
+        String displayName = Objects.equals(reg.getAnonymous(), Constants.ANONYMOUS_NO)
+                ? realNameOf(userId)
+                : UserService.anonymousName(userId);
+        eventProducer.sendRegistrationCancel(
+                RegistrationCancelEvent.of(gameId, userId, displayName));
+
+        log.info("取消报名成功: game={}, user={}", gameId, userId);
+        return buildGameResponse(game);
+    }
+
+    /** 取用户真实姓名，取不到时退回匿名昵称 */
+    private String realNameOf(Long userId) {
+        User user = userMapper.selectById(userId);
+        return user != null && user.getName() != null && !user.getName().isBlank()
+                ? user.getName()
+                : UserService.anonymousName(userId);
     }
 
     /**
@@ -165,6 +225,8 @@ public class GameService {
     private GameResponse buildGameResponse(Game game) {
         List<Registration> regs = registrationMapper.selectList(
                 new LambdaQueryWrapper<Registration>().eq(Registration::getGameId, game.getId()));
+        // 真实姓名只对登录用户展示：球局详情是公开接口，未登录访客一律看匿名昵称
+        Map<Long, String> realNames = loadRealNames(regs, UserContext.get() != null);
         return GameResponse.builder()
                 .id(game.getId())
                 .title(game.getTitle())
@@ -177,13 +239,32 @@ public class GameService {
                 .creatorId(game.getCreatorId())
                 .registeredCount(regs.size())
                 .registrations(regs.stream()
-                        .map(r -> GameResponse.RegistrationItem.builder()
-                                .userId(r.getUserId())
-                                .anonymousName(UserService.anonymousName(r.getUserId()))
-                                .gender(r.getGender())
-                                .rating(r.getRating())
-                                .build())
+                        .map(r -> {
+                            boolean anonymous =
+                                    !Objects.equals(r.getAnonymous(), Constants.ANONYMOUS_NO);
+                            String anonymousName = UserService.anonymousName(r.getUserId());
+                            String realName = realNames.get(r.getUserId());
+                            return GameResponse.RegistrationItem.builder()
+                                    .userId(r.getUserId())
+                                    .anonymousName(anonymousName)
+                                    .displayName(anonymous || realName == null ? anonymousName : realName)
+                                    .anonymous(anonymous ? Constants.ANONYMOUS_YES : Constants.ANONYMOUS_NO)
+                                    .gender(r.getGender())
+                                    .rating(r.getRating())
+                                    .build();
+                        })
                         .toList())
                 .build();
+    }
+
+    /** 批量取报名人真实姓名；未登录或名单为空时返回空 Map（不查库） */
+    private Map<Long, String> loadRealNames(List<Registration> regs, boolean viewerLoggedIn) {
+        if (!viewerLoggedIn || regs.isEmpty()) {
+            return Map.of();
+        }
+        List<Long> userIds = regs.stream().map(Registration::getUserId).distinct().toList();
+        return userMapper.selectBatchIds(userIds).stream()
+                .filter(u -> u.getName() != null && !u.getName().isBlank())
+                .collect(Collectors.toMap(User::getId, User::getName, (a, b) -> a));
     }
 }

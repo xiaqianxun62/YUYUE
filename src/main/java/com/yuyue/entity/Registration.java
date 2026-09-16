@@ -28,5 +28,8 @@ public class Registration {
     /** 报名时积分快照 */
     private Integer rating;
 
+    /** 1 匿名 / 0 实名（Constants.ANONYMOUS_*） */
+    private Integer anonymous;
+
     private LocalDateTime createTime;
 }

@@ -17,7 +17,11 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/**")
                 .excludePathPatterns(
-                        "/auth/**",
+                        // 只放行这三个"换 token"的入口；/auth/me、/auth/profile、/auth/logout
+                        // 必须走拦截器，否则 UserContext 不会被填充，必然报未登录
+                        "/auth/register",
+                        "/auth/login",
+                        "/auth/wxlogin",
                         "/error",
                         "/actuator/**",
                         // ELO 试算：纯计算工具，无需登录（不读库不写库）

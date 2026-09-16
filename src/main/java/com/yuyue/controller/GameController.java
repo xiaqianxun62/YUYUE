@@ -4,6 +4,7 @@ import com.yuyue.common.ApiResponse;
 import com.yuyue.dto.ArrangeRequest;
 import com.yuyue.dto.ArrangeResponse;
 import com.yuyue.dto.GameCreateRequest;
+import com.yuyue.dto.GameRegisterRequest;
 import com.yuyue.dto.GameResponse;
 import com.yuyue.service.GameService;
 import com.yuyue.web.UserContext;
@@ -11,6 +12,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -49,11 +51,22 @@ public class GameController {
         return ApiResponse.ok(gameService.detail(id));
     }
 
-    /** 匿名报名（群外球友官网报名 → clawbot 同步微信群接龙） */
-    @Operation(summary = "匿名报名", description = "写入报名并投递 Kafka，由 clawbot 同步微信群接龙")
+    /**
+     * 报名（群外球友官网报名 → clawbot 同步微信群接龙）
+     * body 不传 = 匿名报名；传 {"anonymous": false} = 实名报名，报名列表对登录用户显示真实姓名
+     */
+    @Operation(summary = "报名", description = "默认匿名；anonymous=false 为实名报名。写入报名并投递 Kafka，由 clawbot 同步微信群接龙")
     @PostMapping("{id}/register")
-    public ApiResponse<GameResponse> register(@PathVariable Long id) {
-        return ApiResponse.ok(gameService.register(UserContext.require(), id));
+    public ApiResponse<GameResponse> register(@PathVariable Long id,
+                                              @RequestBody(required = false) @Valid GameRegisterRequest req) {
+        return ApiResponse.ok(gameService.register(UserContext.require(), id, req));
+    }
+
+    /** 取消报名：仅报名中的球局可取消，投递 Kafka 取消事件让 clawbot 从群接龙移除 */
+    @Operation(summary = "取消报名", description = "删除报名记录并投递 Kafka，由 clawbot 把该人从微信群接龙移除；已编排/已结束的球局不可取消")
+    @DeleteMapping("{id}/register")
+    public ApiResponse<GameResponse> cancelRegister(@PathVariable Long id) {
+        return ApiResponse.ok(gameService.cancelRegister(UserContext.require(), id));
     }
 
     /** 自动编排：引擎按报名构成过滤 8 套方案生成对阵；可传 schemeId 强制指定（如 2 = 全混双） */

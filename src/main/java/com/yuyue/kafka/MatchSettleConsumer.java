@@ -13,6 +13,7 @@ import com.yuyue.mapper.UserMapper;
 import com.yuyue.service.RankingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +31,7 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "yuyue.kafka.enabled", havingValue = "true", matchIfMissing = true)
 public class MatchSettleConsumer {
 
     private final UserMapper userMapper;

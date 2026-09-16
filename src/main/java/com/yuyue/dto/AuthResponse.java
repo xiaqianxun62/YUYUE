@@ -17,6 +17,9 @@ public class AuthResponse {
 
     private String college;
 
+    /** 学号：校园认证后才有，未绑定时为 null */
+    private String studentNo;
+
     private Integer rating;
 
     private Integer gamesPlayed;

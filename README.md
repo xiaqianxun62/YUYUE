@@ -49,7 +49,8 @@ com.yuyue
 
 | Topic | 生产方 | 消费方 | 用途 |
 |-------|--------|--------|------|
-| `yuyue-registration` | 报名接口 | RegistrationConsumer | **clawbot 同步微信群接龙**（当前为日志桩，替换 `pushToWechatGroup` 即可接入真实机器人） |
+| `yuyue-registration` | 报名接口 | RegistrationConsumer | **clawbot 同步微信群接龙**（当前为日志桩，替换 `pushToWechatGroup` 即可接入真实机器人）；事件带 `displayName`：实名报名=真实姓名，匿名=「球友#xxxx」 |
+| `yuyue-registration-cancel` | 取消报名接口 | RegistrationConsumer | **clawbot 把该人从群接龙移除**（日志桩，替换 `removeFromWechatGroup`） |
 | `yuyue-match-settle` | 对局上报 | MatchSettleConsumer | 异步结算 ELO：更新 user、写 rating_history、刷 Redis 榜单（幂等，重投不重复加分） |
 
 ### Redis
@@ -65,10 +66,12 @@ com.yuyue
 | POST | `/auth/register` | 学号+姓名注册（校园认证） |
 | POST | `/auth/login` | 登录，返回 JWT |
 | GET  | `/auth/me` | 当前用户信息 |
+| PUT  | `/auth/profile` | 编辑个人信息（姓名 / 性别 / 学院 / 学号，留空=不修改）；`POST /auth/profile` 同逻辑 |
 | POST | `/games` | 发布球局 |
 | GET  | `/games` | 球局列表 |
 | GET  | `/games/{id}` | 球局详情（报名列表对外匿名） |
-| POST | `/games/{id}/register` | 匿名报名 → Kafka → clawbot 同步群接龙 |
+| POST | `/games/{id}/register` | 报名（body 可选 `anonymous:false` = 实名）→ Kafka → clawbot 同步群接龙 |
+| DELETE | `/games/{id}/register` | 取消报名（仅报名中可取消）→ Kafka → clawbot 从群接龙移除 |
 | POST | `/games/{id}/arrange` | 自动编排（6 方案过滤） |
 | POST | `/matches` | 上报对局结果 → Kafka 异步结算 ELO |
 | GET  | `/ranking?n=10` | 积分榜 Top N |
@@ -101,7 +104,21 @@ docker run -d --name yuyue-kafka -p 9092:9092 \
 mvn spring-boot:run
 ```
 
-环境变量：`MYSQL_HOST` `MYSQL_PORT` `MYSQL_USER` `MYSQL_PASSWORD` `REDIS_HOST` `REDIS_PORT` `KAFKA_SERVERS` `JWT_SECRET`
+### 本地没起 Kafka 也能跑
+
+Kafka 是**可选**依赖。没起 broker 时连接日志会刷屏（`Connection to node -1 ... could not be established`），设环境变量关掉即可：
+
+```bash
+# PowerShell
+$env:KAFKA_ENABLED="false"; mvn spring-boot:run
+# 或 IDEA：Run/Debug Configurations → Environment variables 加 KAFKA_ENABLED=false
+```
+
+关闭后的行为：不注册任何监听容器、不建 Kafka 连接，报名 / 上报对局等接口照常成功，
+事件降级为一行 WARN 日志（不同步群接龙、不异步结算 ELO，对局保持 `settle_status=0`）。
+要跑完整链路就按上面的 docker 命令起 Kafka，并保持 `KAFKA_ENABLED=true`（默认）。
+
+环境变量：`MYSQL_HOST` `MYSQL_PORT` `MYSQL_USER` `MYSQL_PASSWORD` `REDIS_HOST` `REDIS_PORT` `KAFKA_SERVERS` `KAFKA_ENABLED` `JWT_SECRET`
 
 ## 数据库迁移（Flyway）
 

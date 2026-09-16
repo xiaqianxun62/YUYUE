@@ -186,6 +186,7 @@ public class UserService {
                 .name(user.getName())
                 .gender(user.getGender())
                 .college(user.getCollege())
+                .studentNo(user.getStudentNo())
                 .rating(user.getRating())
                 .gamesPlayed(user.getGamesPlayed())
                 .build();

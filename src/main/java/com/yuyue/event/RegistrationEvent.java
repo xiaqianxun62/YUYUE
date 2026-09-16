@@ -16,13 +16,18 @@ public class RegistrationEvent {
 
     private Long userId;
 
-    /** 匿名昵称 */
-    private String anonymousName;
+    /** 接龙 / 列表展示的称呼：实名报名=真实姓名，匿名报名=「球友#xxxx」 */
+    private String displayName;
 
     /** 1男 2女 */
     private Integer gender;
 
-    public static RegistrationEvent of(Long gameId, Long userId, String anonymousName, Integer gender) {
-        return new RegistrationEvent(gameId, userId, anonymousName, gender);
+    /** 1匿名 0实名（Constants.ANONYMOUS_*） */
+    private Integer anonymous;
+
+    public static RegistrationEvent of(Long gameId, Long userId, String displayName,
+                                       Integer gender, boolean anonymous) {
+        return new RegistrationEvent(gameId, userId, displayName, gender,
+                anonymous ? 1 : 0);
     }
 }

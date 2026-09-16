@@ -24,6 +24,9 @@ public final class Constants {
     /** 报名事件：机器人消费后同步微信群接龙 */
     public static final String TOPIC_REGISTRATION = "yuyue-registration";
 
+    /** 取消报名事件：机器人消费后把该人从群接龙移除 */
+    public static final String TOPIC_REGISTRATION_CANCEL = "yuyue-registration-cancel";
+
     /** 对局结算事件：消费后落库积分变更 */
     public static final String TOPIC_MATCH_SETTLE = "yuyue-match-settle";
 
@@ -50,6 +53,11 @@ public final class Constants {
     /** 对局胜方：A队 / B队 */
     public static final int WINNER_A = 1;
     public static final int WINNER_B = 2;
+
+    /** 报名展示方式：匿名（对外只显示「球友#xxxx」） */
+    public static final int ANONYMOUS_YES = 1;
+    /** 报名展示方式：实名（报名列表对登录用户显示真实姓名） */
+    public static final int ANONYMOUS_NO = 0;
 
     /** 对局结算状态 */
     public static final int SETTLE_PENDING = 0;

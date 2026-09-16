@@ -15,6 +15,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -55,6 +56,14 @@ public class AuthController {
     @Operation(summary = "完善资料", description = "微信用户补充姓名 / 性别 / 学院 / 学号")
     @PostMapping("profile")
     public ApiResponse<AuthResponse> profile(@Valid @RequestBody ProfileUpdateRequest req) {
+        return ApiResponse.ok(userService.updateProfile(UserContext.require(), req));
+    }
+
+    /** 编辑个人信息：与 POST /auth/profile 同逻辑，REST 语义上是「整体更新资料」 */
+    @Operation(summary = "编辑个人信息",
+            description = "修改姓名 / 性别 / 学院 / 学号，字段留空表示不修改；学号做唯一校验")
+    @PutMapping("profile")
+    public ApiResponse<AuthResponse> updateProfile(@Valid @RequestBody ProfileUpdateRequest req) {
         return ApiResponse.ok(userService.updateProfile(UserContext.require(), req));
     }
 

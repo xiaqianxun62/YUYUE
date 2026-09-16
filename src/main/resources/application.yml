@@ -38,6 +38,9 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       acks: all
       retries: 3
+      properties:
+        # broker 不可用时最多阻塞 3s 即抛错，避免报名/上报接口被拖死（默认 60s）
+        max.block.ms: 3000
     consumer:
       group-id: yuyue-group
       auto-offset-reset: earliest
@@ -47,6 +50,8 @@ spring:
         spring.json.trusted.packages: com.yuyue.*
     listener:
       ack-mode: record
+      # 首次启动 topic 不存在时不让容器反复重启（由 broker auto.create.topics 兜底）
+      missing-topics-fatal: false
   # 热部署（仅开发期；生产 jar 不含 devtools，自动失效）
   devtools:
     restart:
@@ -81,6 +86,10 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 yuyue:
+  kafka:
+    # 本地没起 Kafka 时设 KAFKA_ENABLED=false：不创建消费者容器、事件降级为日志，
+    # 报名 / 上报对局等接口照常可用（只是不同步群接龙、不异步结算）
+    enabled: ${KAFKA_ENABLED:true}
   swagger:
     auto-auth:
       # 给 Swagger UI 注入自动登录脚本：登录成功后自动持有 JWT
@@ -98,3 +107,9 @@ yuyue:
     k-new: 40       # ≤20 场
     k-mid: 24       # 21-60 场
     k-pro: 16       # >60 场
+
+logging:
+  level:
+    # Kafka 没启动时 NetworkClient 会持续刷 WARN，降到 ERROR 免得刷屏；
+    # 排查连接问题时把它改回 WARN 即可
+    org.apache.kafka.clients.NetworkClient: ERROR

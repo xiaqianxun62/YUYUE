@@ -13,10 +13,12 @@ import com.yuyue.dto.GameResponse;
 import com.yuyue.exception.BizException;
 import com.yuyue.service.GameService;
 import com.yuyue.web.UserContext;
+import com.yuyue.util.ImageUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -42,6 +44,7 @@ import java.util.Random;
 @RestController
 @RequestMapping("games")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "球局", description = "发布 / 列表 / 详情 / 报名 / 自动编排")
 public class GameController {
 
@@ -81,6 +84,15 @@ public class GameController {
                 return ApiResponse.fail(ErrorCode.PARAM_ERROR, "非法文件名");
             }
             file.transferTo(target.toFile());
+
+            // 生成缩略图（800×800 JPEG），失败不阻断主流程
+            try {
+                ImageUtils.generateThumbnail(target, dir.resolve(ImageUtils.thumbFileName(fileName)),
+                        ImageUtils.COVER_THUMB_SIZE, ImageUtils.COVER_THUMB_SIZE,
+                        contentType, file.getOriginalFilename());
+            } catch (Exception e) {
+                log.warn("封面缩略图生成失败（不影响主流程）: {}", fileName, e);
+            }
         } catch (IOException e) {
             return ApiResponse.fail(ErrorCode.SYSTEM_ERROR, "封面保存失败");
         }

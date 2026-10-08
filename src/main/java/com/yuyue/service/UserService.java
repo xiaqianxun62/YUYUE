@@ -15,6 +15,7 @@ import com.yuyue.common.Constants;
 import com.yuyue.config.JwtProperties;
 import com.yuyue.mapper.UserMapper;
 import com.yuyue.util.JwtUtil;
+import com.yuyue.util.ImageUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -206,6 +207,11 @@ public class UserService {
                 throw new BizException(ErrorCode.PARAM_ERROR, "非法文件名");
             }
             file.transferTo(target.toFile());
+
+            // 生成缩略图（200×200 JPEG），失败不阻断主流程
+            generateThumbSilently(target, dir.resolve(ImageUtils.thumbFileName(fileName)),
+                    ImageUtils.AVATAR_THUMB_SIZE, ImageUtils.AVATAR_THUMB_SIZE,
+                    contentType, file.getOriginalFilename());
         } catch (IOException e) {
             throw new BizException(ErrorCode.SYSTEM_ERROR, "头像保存失败");
         }
@@ -217,6 +223,19 @@ public class UserService {
         user.setAvatar(url);
         userMapper.updateById(user);
         return url;
+    }
+
+    /**
+     * 静默生成缩略图：失败只打 warn，不抛异常、不阻断主流程。
+     * 历史图片（上传时还没缩略图功能的）不存在 _thumb 文件，前端 SmartImage 会自动回退到原图。
+     */
+    private void generateThumbSilently(Path src, Path thumb, int maxW, int maxH,
+                                       String contentType, String originalName) {
+        try {
+            ImageUtils.generateThumbnail(src, thumb, maxW, maxH, contentType, originalName);
+        } catch (Exception e) {
+            log.warn("头像缩略图生成失败（不影响主流程）: {} -> {}", src.getFileName(), thumb.getFileName(), e);
+        }
     }
 
     /** 取扩展名（小写），不在白名单内时抛错 */

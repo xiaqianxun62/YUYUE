@@ -4,6 +4,8 @@ import com.yuyue.common.Constants;
 import com.yuyue.exception.BizException;
 import com.yuyue.common.ErrorCode;
 import com.yuyue.util.JwtUtil;
+
+import org.springframework.lang.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -12,6 +14,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.lang.NonNull;
 
 import java.util.regex.Pattern;
 
@@ -41,7 +44,10 @@ public class AuthInterceptor implements HandlerInterceptor {
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+    public boolean preHandle(
+        @NonNull HttpServletRequest request, 
+        @Nullable HttpServletResponse response, 
+        @Nullable Object handler) {
         // 官网首页未登录也要能读：积分榜、球局列表与详情（报名列表本身对外匿名）
         if (isPublicRead(request)) {
             return true;
@@ -97,7 +103,11 @@ public class AuthInterceptor implements HandlerInterceptor {
     }
 
     @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+    public void afterCompletion(
+        @NonNull HttpServletRequest request, 
+        @NonNull HttpServletResponse response, 
+        @NonNull Object handler, 
+        @Nullable Exception ex) {
         UserContext.clear();
     }
 }

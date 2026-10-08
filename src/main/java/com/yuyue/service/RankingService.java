@@ -25,7 +25,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class RankingService {
 
-    private static final int DEFAULT_TOP_N = 10;
+    //private static final int DEFAULT_TOP_N = 10;
     private static final int MAX_TOP_N = 100;
 
     private final StringRedisTemplate redisTemplate;

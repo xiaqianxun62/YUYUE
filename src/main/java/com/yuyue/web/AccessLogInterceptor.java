@@ -5,6 +5,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.lang.NonNull;
+import org.springframework.lang.Nullable;
 
 /**
  * 全量 HTTP 访问日志：记录每个进入 Controller 的请求的方法 / 路径 / 查询串 /
@@ -21,14 +23,20 @@ public class AccessLogInterceptor implements HandlerInterceptor {
     private static final String START_NANOS = "yuyue.access.startNanos";
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+    public boolean preHandle(
+        @NonNull HttpServletRequest request, 
+        @NonNull HttpServletResponse response, 
+        @NonNull Object handler) {
         request.setAttribute(START_NANOS, System.nanoTime());
         return true;
     }
 
     @Override
-    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
-                                Object handler, Exception ex) {
+    public void afterCompletion(
+        @NonNull HttpServletRequest request,
+        @NonNull HttpServletResponse response,
+        @NonNull Object handler, 
+        @Nullable Exception ex) {
         Object startAttr = request.getAttribute(START_NANOS);
         long costMs = startAttr instanceof Long start
                 ? (System.nanoTime() - start) / 1_000_000

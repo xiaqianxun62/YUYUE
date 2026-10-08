@@ -18,6 +18,7 @@ import java.util.Set;
 
 /**
  * 积分榜：Redis ZSet 承载热点读（官网与小程序同源），定时从 MySQL 全量校准
+ * 只显示打过比赛（win_count + loss_count > 0）的用户
  */
 @Slf4j
 @Service
@@ -57,13 +58,12 @@ public class RankingService {
             }
             result.add(RankingItem.builder()
                     .userId(userId)
-                    .anonymousName(UserService.anonymousName(userId))
-                    .name(user.getName())
-                    .college(user.getCollege())
+                    .name(user.getName() != null ? user.getName() : "球友" + userId)
                     .rating(tuple.getScore() == null ? user.getRating() : tuple.getScore().intValue())
                     .win(user.getWinCount())
                     .loss(user.getLossCount())
                     .rank(rank++)
+                    .avatar(user.getAvatar())
                     .build());
         }
         return result;
@@ -74,16 +74,20 @@ public class RankingService {
         redisTemplate.opsForZSet().add(Constants.RANKING_ZSET, String.valueOf(userId), rating);
     }
 
-    /** 从 MySQL 全量重建榜单 */
+    /** 从 MySQL 全量重建榜单（只保留打过比赛的用户） */
     public void rebuildFromDb() {
-        List<User> users = userMapper.selectList(null);
+        // 只取 win_count + loss_count > 0 的用户（至少打过一场已结算比赛）
+        List<User> users = userMapper.selectList(new LambdaQueryWrapper<User>()
+                .apply("(COALESCE(win_count, 0) + COALESCE(loss_count, 0)) > 0"));
         if (users.isEmpty()) {
+            redisTemplate.delete(Constants.RANKING_ZSET);
+            log.info("积分榜重建：暂无打过比赛的用户");
             return;
         }
         redisTemplate.delete(Constants.RANKING_ZSET);
         users.forEach(u -> redisTemplate.opsForZSet()
                 .add(Constants.RANKING_ZSET, String.valueOf(u.getId()), u.getRating()));
-        log.info("积分榜已从 MySQL 重建: {} 人", users.size());
+        log.info("积分榜已从 MySQL 重建（仅打过比赛）: {} 人", users.size());
     }
 
     /** 每 10 分钟校准一次 Redis 与 MySQL 的一致性 */

@@ -3,6 +3,7 @@ package com.yuyue.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.yuyue.common.ErrorCode;
 import com.yuyue.config.EloProperties;
+import com.yuyue.config.UploadProperties;
 import com.yuyue.dto.AuthResponse;
 import com.yuyue.dto.LoginRequest;
 import com.yuyue.dto.ProfileUpdateRequest;
@@ -18,13 +19,20 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.HexFormat;
+import java.util.Locale;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -42,20 +50,21 @@ public class UserService {
     private final JwtProperties jwtProperties;
     private final StringRedisTemplate redisTemplate;
     private final WeChatService weChatService;
+    private final UploadProperties uploadProperties;
 
     public AuthResponse register(RegisterRequest req) {
         Long existing = userMapper.selectCount(
-                new LambdaQueryWrapper<User>().eq(User::getStudentNo, req.getStudentNo()));
+                new LambdaQueryWrapper<User>().eq(User::getAccount, req.getAccount()));
         if (existing > 0) {
             throw new BizException(ErrorCode.USER_EXISTS);
         }
+        checkNameUnique(null, req.getName());
 
         String salt = randomSalt();
         User user = new User();
-        user.setStudentNo(req.getStudentNo());
+        user.setAccount(req.getAccount());
         user.setName(req.getName());
         user.setGender(req.getGender());
-        user.setCollege(req.getCollege());
         user.setPasswordHash(hash(req.getPassword(), salt) + ":" + salt);
         user.setRating(eloProperties.getDefaultRating());
         user.setGamesPlayed(0);
@@ -68,11 +77,11 @@ public class UserService {
 
     public AuthResponse login(LoginRequest req) {
         User user = userMapper.selectOne(
-                new LambdaQueryWrapper<User>().eq(User::getStudentNo, req.getStudentNo()));
+                new LambdaQueryWrapper<User>().eq(User::getAccount, req.getAccount()));
         if (user == null) {
             throw new BizException(ErrorCode.PASSWORD_ERROR);
         }
-        // 微信用户没有密码，直接拒绝学号密码登录，提示走微信登录或先设置密码
+        // 微信用户没有密码，直接拒绝账号密码登录，提示走微信登录或先设置密码
         if (user.getPasswordHash() == null || !user.getPasswordHash().contains(":")) {
             throw new BizException(ErrorCode.PASSWORD_ERROR);
         }
@@ -85,7 +94,7 @@ public class UserService {
 
     /**
      * 微信小程序登录：code → openid，已存在则直接登录，否则自动注册并返回 JWT。
-     * 首次注册的用户没有姓名学号，需后续调用 profile 接口完善。
+     * 首次注册的用户没有姓名账号，需后续调用 profile 接口完善。
      */
     public AuthResponse wxLogin(WxLoginRequest req) {
         String openid = weChatService.code2Openid(req.getCode());
@@ -96,6 +105,7 @@ public class UserService {
             user = new User();
             user.setWxOpenid(openid);
             user.setName(defaultName(req.getNickName(), openid));
+            user.setAvatar(req.getAvatarUrl());
             user.setGender(0);
             user.setRating(eloProperties.getDefaultRating());
             user.setGamesPlayed(0);
@@ -103,6 +113,10 @@ public class UserService {
             user.setLossCount(0);
             userMapper.insert(user);
             log.info("微信用户首次登录: openid={}, userId={}", openid, user.getId());
+        } else if (req.getAvatarUrl() != null && !req.getAvatarUrl().isBlank()) {
+            // 已存在用户也同步更新头像
+            user.setAvatar(req.getAvatarUrl());
+            userMapper.updateById(user);
         }
         AuthResponse resp = buildAuthResponse(user, jwtUtil.issue(user.getId()));
         resp.setNewUser(isNew);
@@ -110,7 +124,7 @@ public class UserService {
     }
 
     /**
-     * 完善资料：微信用户补充姓名 / 性别 / 学院 / 学号（学号非空时做唯一校验）
+     * 完善资料：微信用户补充姓名 / 性别 / 账号（账号非空时做唯一校验）
      */
     public AuthResponse updateProfile(Long userId, ProfileUpdateRequest req) {
         User user = userMapper.selectById(userId);
@@ -118,23 +132,29 @@ public class UserService {
             throw new BizException(ErrorCode.USER_NOT_FOUND);
         }
         if (req.getName() != null && !req.getName().isBlank()) {
-            user.setName(req.getName().trim());
+            String newName = req.getName().trim();
+            checkNameUnique(userId, newName);
+            user.setName(newName);
         }
         if (req.getGender() != null) {
             user.setGender(req.getGender());
         }
-        if (req.getCollege() != null) {
-            user.setCollege(req.getCollege().trim());
-        }
-        if (req.getStudentNo() != null && !req.getStudentNo().isBlank()) {
-            String studentNo = req.getStudentNo().trim();
+        if (req.getAccount() != null && !req.getAccount().isBlank()) {
+            String account = req.getAccount().trim();
             Long exists = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                    .eq(User::getStudentNo, studentNo)
+                    .eq(User::getAccount, account)
                     .ne(User::getId, userId));
             if (exists > 0) {
                 throw new BizException(ErrorCode.USER_EXISTS);
             }
-            user.setStudentNo(studentNo);
+            user.setAccount(account);
+        }
+        if (req.getAvatar() != null && !req.getAvatar().isBlank()) {
+            String avatar = req.getAvatar().trim();
+            if (!avatar.startsWith("http://") && !avatar.startsWith("https://") && !avatar.startsWith("/")) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "头像地址必须以 http(s):// 开头或以 / 开头的相对路径");
+            }
+            user.setAvatar(avatar);
         }
         userMapper.updateById(user);
         return buildAuthResponse(user, null);
@@ -156,6 +176,65 @@ public class UserService {
         return buildAuthResponse(user, null);
     }
 
+    /** 上传扩展名白名单 */
+    private static final Set<String> AVATAR_EXT_WHITELIST =
+            Set.of("jpg", "jpeg", "png", "webp", "gif");
+
+    /**
+     * 上传个人头像：校验类型与大小，落地到本地 uploads 目录，更新 user.avatar 并返回可访问 URL
+     */
+    public String uploadAvatar(Long userId, MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "头像文件不能为空");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !contentType.startsWith("image/")) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "仅支持图片格式");
+        }
+        long size = file.getSize();
+        if (size > uploadProperties.getMaxSize()) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "文件大小超过限制");
+        }
+        String ext = pickAvatarExt(file.getOriginalFilename());
+        String fileName = "avatar_" + userId + "_" + System.currentTimeMillis()
+                + "_" + RANDOM.nextInt(10000) + "." + ext;
+        Path dir = Paths.get(uploadProperties.getDir()).toAbsolutePath().normalize();
+        try {
+            Files.createDirectories(dir);
+            Path target = dir.resolve(fileName).normalize();
+            if (!target.startsWith(dir)) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "非法文件名");
+            }
+            file.transferTo(target.toFile());
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.SYSTEM_ERROR, "头像保存失败");
+        }
+        String url = uploadProperties.getUrlPrefix() + "/" + fileName;
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BizException(ErrorCode.USER_NOT_FOUND);
+        }
+        user.setAvatar(url);
+        userMapper.updateById(user);
+        return url;
+    }
+
+    /** 取扩展名（小写），不在白名单内时抛错 */
+    private String pickAvatarExt(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "文件名不能为空");
+        }
+        int dot = originalFilename.lastIndexOf('.');
+        if (dot < 0 || dot == originalFilename.length() - 1) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "文件缺少扩展名");
+        }
+        String ext = originalFilename.substring(dot + 1).toLowerCase(Locale.ROOT);
+        if (!AVATAR_EXT_WHITELIST.contains(ext)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "仅支持 jpg/jpeg/png/webp/gif 格式");
+        }
+        return ext;
+    }
+
     /**
      * 登出：把 token 加入 Redis 黑名单，之后 AuthInterceptor 会直接拒绝该 token。
      * 黑名单是 Set，TTL 设在 key 上，取 token 的最大存活时间，到期自动清理。
@@ -173,10 +252,27 @@ public class UserService {
     }
 
     /**
-     * 匿名展示名：对外隐藏真实姓名，如「球友#1024」
+     * 用户昵称唯一校验（业务层主动报错）。
+     *
+     * @param excludeId 排除的用户 id（编辑资料传自己，注册传 null）
      */
-    public static String anonymousName(Long userId) {
-        return "球友#" + (1000 + Math.floorMod(userId * 31, 9000));
+    private void checkNameUnique(Long excludeId, String name) {
+        if (name == null || name.isBlank()) return;
+        Long cnt = userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getName, name.trim())
+                .ne(excludeId != null, User::getId, excludeId));
+        if (cnt != null && cnt > 0) {
+            throw new BizException(ErrorCode.USER_NAME_DUPLICATE);
+        }
+    }
+
+    /** 前端公开查重接口：未登录也能调（注册前预先校验） */
+    public boolean nameAvailable(String name, Long excludeId) {
+        if (name == null || name.isBlank()) return true;
+        Long cnt = userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getName, name.trim())
+                .ne(excludeId != null, User::getId, excludeId));
+        return cnt == null || cnt == 0;
     }
 
     private AuthResponse buildAuthResponse(User user, String token) {
@@ -185,10 +281,11 @@ public class UserService {
                 .userId(user.getId())
                 .name(user.getName())
                 .gender(user.getGender())
-                .college(user.getCollege())
-                .studentNo(user.getStudentNo())
+                .account(user.getAccount())
+                .avatar(user.getAvatar())
                 .rating(user.getRating())
                 .gamesPlayed(user.getGamesPlayed())
+                .isAdmin(user.getIsAdmin() != null && user.getIsAdmin() == 1)
                 .build();
     }
 

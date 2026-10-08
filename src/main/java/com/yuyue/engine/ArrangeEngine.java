@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 自动编排引擎：按报名人员的性别构成自动过滤 6 套方案，选出唯一适用方案并生成对阵
@@ -28,6 +29,22 @@ import java.util.List;
 @Slf4j
 @Component
 public class ArrangeEngine {
+
+    /** 方案编号 → 方案名（与前端 ARRANGE_SCHEMES 保持一致） */
+    private static final Map<Integer, String> SCHEME_NAMES = Map.of(
+            1, "全单打",
+            2, "全混双",
+            3, "全男双",
+            4, "全女双",
+            5, "混搭·混双优先",
+            6, "混搭·同性别优先",
+            7, "混双·纯随机",
+            8, "全随机");
+
+    /** 方案编号换名字；未编排 / 未知编号返回 null 方便前端判断 */
+    public static String schemeNameOf(Integer schemeId) {
+        return schemeId == null ? null : SCHEME_NAMES.get(schemeId);
+    }
 
     /** 报名球员输入 */
     public record Player(Long userId, int gender, int rating) {

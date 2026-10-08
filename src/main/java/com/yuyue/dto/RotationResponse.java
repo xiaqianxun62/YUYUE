@@ -27,6 +27,11 @@ public class RotationResponse {
 
     private List<StatItem> stats;
 
+    /** 报名统计：总人数、男生、女生 */
+    private int totalPlayers;
+    private int maleCount;
+    private int femaleCount;
+
     @Data
     @Builder
     public static class PlayerBrief {
@@ -34,6 +39,8 @@ public class RotationResponse {
         private String label;
         private int gender;
         private int rating;
+        /** 个人头像 URL */
+        private String avatar;
     }
 
     @Data
@@ -51,11 +58,24 @@ public class RotationResponse {
         /** 场地号，从 1 开始 */
         private int court;
         private int format;
+        /** 单打 / 男双 / 女双 / 混双（按两队实际性别构成判定） */
+        private String formatName;
         private List<PlayerBrief> teamA;
         private List<PlayerBrief> teamB;
         /** 两队积分和，用于判断本场是否势均力敌 */
         private int sumA;
         private int sumB;
+        /** A 队的 ELO 期望胜率（0-1），越接近 0.5 越势均力敌 */
+        private Double expectedA;
+        /**
+         * 真实球局生成轮排时，每片场地会对应 match_game 表里的一条对阵；
+         * 快速试算（没有 gameId）时为 null。
+         */
+        private Long matchId;
+        private Integer scoreA;
+        private Integer scoreB;
+        /** 1 A队胜 2 B队胜 0 未计分 */
+        private Integer winner;
     }
 
     @Data
@@ -65,10 +85,20 @@ public class RotationResponse {
         private String label;
         private int gender;
         private int rating;
+        /** 个人头像 URL */
+        private String avatar;
         /** 上场轮数 */
         private int playCount;
         /** 休息轮数 */
         private int restCount;
+        /** 胜场数（已计分的对阵） */
+        private int winCount;
+        /** 败场数（已计分的对阵） */
+        private int loseCount;
+        /** 净胜分（所在队伍每局得分-失分累加） */
+        private int points;
+        /** 本球局累计 ELO 变化（胜为正、负为负），来自 rating_history */
+        private int eloDelta;
         /** 与谁搭档过、各几次 */
         private List<PartnerItem> partners;
     }

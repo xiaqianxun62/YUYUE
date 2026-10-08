@@ -1,11 +1,13 @@
 package com.yuyue.service;
 
 import com.yuyue.common.Constants;
+import com.yuyue.common.ErrorCode;
 import com.yuyue.config.EloProperties;
 import com.yuyue.dto.EloSimulateRequest;
 import com.yuyue.dto.EloSimulateResponse;
 import com.yuyue.engine.ArrangeEngine;
 import com.yuyue.engine.EloCalculator;
+import com.yuyue.exception.BizException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -43,10 +45,16 @@ public class EloSimulateService {
 
         boolean roundRobin = Boolean.TRUE.equals(req.getRoundRobin());
 
+        // 赛制（单打/男双/女双/混双）优先转成对应的编排方案；指定了方案则直接用方案
+        Integer schemeId = req.getSchemeId();
+        if (schemeId == null && req.getFormat() != null) {
+            schemeId = schemeOfFormat(req.getFormat(), males, females);
+        }
+
         // 指定了方案就按方案编排，否则按性别构成自动过滤
-        ArrangeEngine.ArrangeResult arranged = req.getSchemeId() == null
+        ArrangeEngine.ArrangeResult arranged = schemeId == null
                 ? arrangeEngine.arrange(players, roundRobin)
-                : arrangeEngine.arrangeByScheme(players, req.getSchemeId(), roundRobin);
+                : arrangeEngine.arrangeByScheme(players, schemeId, roundRobin);
 
         // 当前积分：循环赛里同一个人要打多场，逐场累计（下一场以上一场赛后分为起点）
         Map<Long, Integer> current = new LinkedHashMap<>();
@@ -100,6 +108,41 @@ public class EloSimulateService {
                 .players(simPlayers)
                 .matches(matches)
                 .build();
+    }
+
+    /**
+     * 赛制 → 编排方案：1 单打→全单打 2 男双→全男双 3 女双→全女双 4 混双→全混双。
+     * 人数明显不满足时给出可读提示，免得试算出来是空的。
+     */
+    private int schemeOfFormat(int format, int males, int females) {
+        switch (format) {
+            case Constants.FORMAT_SINGLES:
+                return 1;
+            case Constants.FORMAT_MEN_DOUBLES:
+                if (males < 4) {
+                    throw new BizException(ErrorCode.PARAM_ERROR,
+                            "男双需要至少 4 名男生，当前男生 " + males + " 人");
+                }
+                return 3;
+            case Constants.FORMAT_WOMEN_DOUBLES:
+                if (females < 4) {
+                    throw new BizException(ErrorCode.PARAM_ERROR,
+                            "女双需要至少 4 名女生，当前女生 " + females + " 人");
+                }
+                return 4;
+            case Constants.FORMAT_MIXED_DOUBLES:
+                if (males < 2 || females < 2) {
+                    throw new BizException(ErrorCode.PARAM_ERROR,
+                            "混双需要男女各至少 2 人，当前男 " + males + " 人、女 " + females + " 人");
+                }
+                if (males != females) {
+                    throw new BizException(ErrorCode.PARAM_ERROR,
+                            "全混双要求男女人数相等，当前男 " + males + " 人、女 " + females + " 人");
+                }
+                return 2;
+            default:
+                throw new BizException(ErrorCode.PARAM_ERROR, "不支持的赛制: " + format);
+        }
     }
 
     private void addPlayer(List<ArrangeEngine.Player> players, Map<Long, ArrangeEngine.Player> byId,

@@ -1,5 +1,6 @@
 package com.yuyue.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
 
@@ -23,6 +24,7 @@ public class EloRulesResponse {
     private String formula;
 
     /** K 因子档位（含该档位下的典型加减分） */
+    @JsonProperty("kRules")
     private List<KRule> kRules;
 
     /** 典型对局场景（真实 settle 计算） */

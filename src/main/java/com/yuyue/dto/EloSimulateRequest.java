@@ -33,6 +33,14 @@ public class EloSimulateRequest {
     private Integer schemeId;
 
     /**
+     * 赛制（与 schemeId 二选一，同时传时以 schemeId 为准）：
+     * 1 单打 → 全单打方案，2 男双 → 全男双，3 女双 → 全女双，4 混双 → 全混双。
+     */
+    @Min(value = 1, message = "赛制参数错误")
+    @Max(value = 4, message = "赛制仅支持 1 单打 / 2 男双 / 3 女双 / 4 混双")
+    private Integer format;
+
+    /**
      * 赛制：false=单轮（每人只打一场），true=循环赛（每支队伍与其他所有队伍各打一场，共 k*(k-1)/2 局）。
      * 循环赛下积分逐场累计：下一场以上一场打完的分数为起点。
      */

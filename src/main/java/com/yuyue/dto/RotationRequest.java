@@ -36,8 +36,16 @@ public class RotationRequest {
     @Max(value = 2, message = "赛制仅支持 1 单打 / 2 双打")
     private int format = 2;
 
-    /** 是否按积分均衡组队（每场两队实力接近） */
+    /** 是否按 ELO 期望胜率均衡组队（每场双方期望胜率尽量接近 50%） */
     private Boolean balanceStrength = true;
+
+    /**
+     * 双打的性别组队规则（单打时忽略）：
+     * 0 不分性别 1 尽量男双 2 尽量女双 3 尽量混双（每队一男一女）。
+     */
+    @Min(value = 0, message = "性别规则参数错误")
+    @Max(value = 3, message = "性别规则参数错误")
+    private Integer genderRule = 0;
 
     @Data
     public static class RotationPlayer {

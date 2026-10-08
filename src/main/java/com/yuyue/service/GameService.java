@@ -6,27 +6,31 @@ import com.yuyue.common.ErrorCode;
 import com.yuyue.dto.ArrangeRequest;
 import com.yuyue.dto.ArrangeResponse;
 import com.yuyue.dto.GameCreateRequest;
+import com.yuyue.dto.GameMatchesResponse;
 import com.yuyue.dto.GameRegisterRequest;
 import com.yuyue.dto.GameResponse;
 import com.yuyue.engine.ArrangeEngine;
 import com.yuyue.engine.ArrangeEngine.ArrangeResult;
 import com.yuyue.engine.ArrangeEngine.Player;
 import com.yuyue.entity.Game;
+import com.yuyue.entity.MatchGame;
 import com.yuyue.entity.Registration;
 import com.yuyue.entity.User;
-import com.yuyue.event.RegistrationCancelEvent;
-import com.yuyue.event.RegistrationEvent;
 import com.yuyue.exception.BizException;
 import com.yuyue.mapper.GameMapper;
+import com.yuyue.mapper.MatchGameMapper;
 import com.yuyue.mapper.RegistrationMapper;
-import com.yuyue.kafka.EventProducer;
 import com.yuyue.mapper.UserMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -41,31 +45,175 @@ public class GameService {
 
     private final GameMapper gameMapper;
     private final RegistrationMapper registrationMapper;
+    private final MatchGameMapper matchGameMapper;
     private final UserMapper userMapper;
+    private final com.yuyue.mapper.CourtMapper courtMapper;
     private final StringRedisTemplate redisTemplate;
     private final ArrangeEngine arrangeEngine;
-    private final EventProducer eventProducer;
 
-    /** 发布球局 */
+    /**
+     * 发布球局。两种模式：
+     * 预报名（默认）必须给定日期与开始时间；现场报名只要标题 + 人数 + 场地数，
+     * 时间地点留空，等人报满后由发起人选编排方案、现场开打。
+     */
     public GameResponse create(Long creatorId, GameCreateRequest req) {
         Game game = new Game();
-        game.setTitle(req.getTitle());
-        game.setLocation(req.getLocation());
-        game.setPlayDate(req.getPlayDate());
-        game.setStartTime(req.getStartTime());
-        game.setEndTime(req.getEndTime());
-        game.setMaxPlayers(req.getMaxPlayers());
+        applyCreateRequest(game, req);
         game.setStatus(Constants.GAME_STATUS_OPEN);
         game.setCreatorId(creatorId);
-        gameMapper.insert(game);
-        log.info("球局发布: id={}, title={}, creator={}", game.getId(), game.getTitle(), creatorId);
+        // 前置查重（业务层主动提示）+ DuplicateKeyException 兜底（并发竞态被唯一键挡下）
+        checkTitleUnique(null, game.getTitle());
+        try {
+            gameMapper.insert(game);
+        } catch (DuplicateKeyException e) {
+            throw new BizException(ErrorCode.GAME_TITLE_DUPLICATE);
+        }
+        log.info("球局发布: id={}, title={}, mode={}, creator={}",
+                game.getId(), game.getTitle(), game.getMode(), creatorId);
         return buildGameResponse(game);
     }
 
-    /** 球局列表（按日期倒序） */
+    /**
+     * 编辑球局：仅发起人可编辑（管理员例外），且仅限 status=0（报名中）状态。
+     * 不能修改 status / creatorId / schemeId。
+     */
+    @Transactional
+    public GameResponse update(Long operatorId, Long gameId, GameCreateRequest req) {
+        Game game = requireGame(gameId);
+        if (!isAdmin(operatorId) && !Objects.equals(game.getCreatorId(), operatorId)) {
+            throw new BizException(ErrorCode.FORBIDDEN, "只有发起人可以编辑球局");
+        }
+        if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
+            throw new BizException(ErrorCode.GAME_STATUS_ERROR, "已编排或已结束的球局不能修改");
+        }
+        applyCreateRequest(game, req);
+        // 编辑场景：排除自己 id 后标题唯一
+        checkTitleUnique(gameId, game.getTitle());
+        try {
+            gameMapper.updateById(game);
+        } catch (DuplicateKeyException e) {
+            throw new BizException(ErrorCode.GAME_TITLE_DUPLICATE);
+        }
+        log.info("球局编辑: id={}, title={}, operator={}, admin={}",
+                gameId, game.getTitle(), operatorId, isAdmin(operatorId));
+        return buildGameResponse(game);
+    }
+
+    /**
+     * 删除球局：仅发起人可删除（管理员例外），且仅限 status=0（报名中）状态。
+     * 级联软删该球局下所有报名记录（Game / Registration 都有 @TableLogic），
+     * 同时清理 Redis 里的报名计数缓存。
+     */
+    @Transactional
+    public void delete(Long operatorId, Long gameId) {
+        Game game = requireGame(gameId);
+        if (!isAdmin(operatorId) && !Objects.equals(game.getCreatorId(), operatorId)) {
+            throw new BizException(ErrorCode.FORBIDDEN, "只有发起人可以删除球局");
+        }
+        if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
+            throw new BizException(ErrorCode.GAME_STATUS_ERROR, "已编排或已结束的球局不能删除");
+        }
+        // 级联软删报名记录
+        registrationMapper.delete(new LambdaQueryWrapper<Registration>()
+                .eq(Registration::getGameId, gameId));
+        // 清 Redis 报名计数
+        redisTemplate.opsForHash().delete(Constants.GAME_REG_COUNT, String.valueOf(gameId));
+        // 软删球局本身
+        gameMapper.deleteById(gameId);
+        log.info("球局删除: id={}, title={}, operator={}, admin={}",
+                gameId, game.getTitle(), operatorId, isAdmin(operatorId));
+    }
+
+    /** 判断 operatorId 对应用户是否管理员（user.isAdmin == 1） */
+    private boolean isAdmin(Long operatorId) {
+        if (operatorId == null) return false;
+        com.yuyue.entity.User u = userMapper.selectById(operatorId);
+        return u != null && u.getIsAdmin() != null && u.getIsAdmin() == 1;
+    }
+
+    /** 把 GameCreateRequest 的字段落到 game 上，并做模式分支校验（预报名必填日期时间） */
+    private void applyCreateRequest(Game game, GameCreateRequest req) {
+        int mode = req.getMode() == null ? Constants.GAME_MODE_PREBOOK : req.getMode();
+        if (mode != Constants.GAME_MODE_PREBOOK && mode != Constants.GAME_MODE_ONSITE) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "球局模式不合法（0 预报名 / 1 现场报名）");
+        }
+        game.setTitle(req.getTitle());
+        game.setMode(mode);
+        game.setLocation(req.getLocation());
+        game.setCourtId(req.getCourtId());
+        game.setRemark(req.getRemark() == null ? null : req.getRemark().trim());
+        game.setCover(req.getCover());
+        game.setMaxPlayers(req.getMaxPlayers());
+        game.setCourtCount(req.getCourtCount() == null ? 2 : req.getCourtCount());
+        if (mode == Constants.GAME_MODE_PREBOOK) {
+            if (req.getPlayDate() == null) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "打球日期不能为空");
+            }
+            if (req.getStartTime() == null) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "开始时间不能为空");
+            }
+            if (req.getPlayDate().isBefore(LocalDate.now())) {
+                throw new BizException(ErrorCode.PARAM_ERROR, "打球日期不能早于今天");
+            }
+            game.setPlayDate(req.getPlayDate());
+            game.setStartTime(req.getStartTime());
+            game.setEndTime(req.getEndTime());
+        } else {
+            // 现场报名：日期直接取当天（人齐即打），开始/结束时间留空待现场确认
+            game.setPlayDate(LocalDate.now());
+            game.setStartTime(null);
+            game.setEndTime(null);
+        }
+    }
+
+    /**
+     * 球局列表：status 先分组（报名中 → 已编排 → 已结束 → 已取消），
+     * 组内按 playDate 升序（最近的排最前）。
+     * 这样所有"可参与"的球局排在前面，其中又以离现在最近的为先；
+     * 已结束/已取消的排后面，避免用户一进首页看到一堆历史战报。
+     */
     public List<GameResponse> list() {
         return gameMapper.selectList(
-                        new LambdaQueryWrapper<Game>().orderByDesc(Game::getPlayDate))
+                        new LambdaQueryWrapper<Game>()
+                                .eq(Game::getHidden, 0)
+                                .orderByAsc(Game::getStatus)
+                                .orderByAsc(Game::getPlayDate)
+                                .orderByAsc(Game::getStartTime))
+                .stream().map(this::buildGameResponse).toList();
+    }
+
+    /** 发起人 / 管理员：隐藏球局（不再首页显示，但详情页仍可访问） */
+    public void hide(Long gameId, Long operatorId) {
+        Game game = requireGame(gameId);
+        if (!isAdmin(operatorId) && !Objects.equals(game.getCreatorId(), operatorId)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "无权限隐藏该球局");
+        }
+        game.setHidden(1);
+        gameMapper.updateById(game);
+    }
+
+    /** 发起人 / 管理员：恢复显示 */
+    public void unhide(Long gameId, Long operatorId) {
+        Game game = requireGame(gameId);
+        if (!isAdmin(operatorId) && !Objects.equals(game.getCreatorId(), operatorId)) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "无权限恢复该球局");
+        }
+        game.setHidden(0);
+        gameMapper.updateById(game);
+    }
+
+    /** 当前用户参与过的所有球局（按 playDate 倒序） */
+    public List<GameResponse> myGames(Long userId) {
+        List<Registration> regs = registrationMapper.selectList(
+                new LambdaQueryWrapper<Registration>().eq(Registration::getUserId, userId));
+        if (regs.isEmpty()) {
+            return List.of();
+        }
+        List<Long> gameIds = regs.stream().map(Registration::getGameId).toList();
+        return gameMapper.selectList(new LambdaQueryWrapper<Game>()
+                        .in(Game::getId, gameIds)
+                        .orderByDesc(Game::getPlayDate)
+                        .orderByDesc(Game::getStartTime))
                 .stream().map(this::buildGameResponse).toList();
     }
 
@@ -75,13 +223,15 @@ public class GameService {
     }
 
     /**
-     * 报名：校验满员/重复，落库 + Redis 计数 + 发 Kafka 报名事件（机器人消费后同步微信群接龙）
-     *
-     * @param req 为空或 anonymous=true → 匿名报名（默认）；anonymous=false → 实名报名
+     * 报名：校验满员/重复，落库 + Redis 计数（统一实名报名）
      */
     @Transactional
     public GameResponse register(Long userId, Long gameId, GameRegisterRequest req) {
-        Game game = requireGame(gameId);
+        // 行锁串行化同一球局的并发报名：在锁内重新读最新人数，彻底关闭「检查-再插入」竞态超员窗口
+        Game game = gameMapper.selectByIdForUpdate(gameId);
+        if (game == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "球局不存在");
+        }
         if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
             throw new BizException(ErrorCode.GAME_STATUS_ERROR);
         }
@@ -101,10 +251,12 @@ public class GameService {
         if (user == null) {
             throw new BizException(ErrorCode.USER_NOT_FOUND);
         }
+        if (user.getGender() == null || user.getGender() == 0) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "请先完善性别后再报名");
+        }
 
-        boolean anonymous = req == null || req.isAnonymous();
-        if (!anonymous && (user.getName() == null || user.getName().isBlank())) {
-            throw new BizException(ErrorCode.PARAM_ERROR, "请先完善姓名后再实名报名");
+        if (user.getName() == null || user.getName().isBlank()) {
+            throw new BizException(ErrorCode.PARAM_ERROR, "请先完善姓名后再报名");
         }
 
         Registration reg = new Registration();
@@ -112,25 +264,24 @@ public class GameService {
         reg.setUserId(userId);
         reg.setGender(user.getGender());
         reg.setRating(user.getRating());
-        reg.setAnonymous(anonymous ? Constants.ANONYMOUS_YES : Constants.ANONYMOUS_NO);
-        registrationMapper.insert(reg);
+        reg.setAnonymous(Constants.ANONYMOUS_NO);
+        try {
+            registrationMapper.insert(reg);
+        } catch (DuplicateKeyException e) {
+            // 数据库唯一约束兜底：锁窗口外的残留重复（如历史数据、无事务的调用方）
+            throw new BizException(ErrorCode.ALREADY_REGISTERED);
+        }
 
         // Redis 计数（计数器作热点读缓存）
         redisTemplate.opsForHash().increment(Constants.GAME_REG_COUNT,
                 String.valueOf(gameId), 1);
 
-        // Kafka 报名事件 → 机器人同步微信群接龙（实名报名接龙里显示真实姓名）
-        String displayName = anonymous ? UserService.anonymousName(userId) : user.getName();
-        eventProducer.sendRegistration(
-                RegistrationEvent.of(gameId, userId, displayName, user.getGender(), anonymous));
-
-        log.info("报名成功: game={}, user={}, {}", gameId, userId, anonymous ? "匿名" : "实名");
+        log.info("报名成功: game={}, user={}", gameId, userId);
         return buildGameResponse(game);
     }
 
     /**
-     * 取消报名：仅「报名中」的球局可取消，删记录 + Redis 计数 -1 + 发 Kafka 取消事件
-     * （机器人消费后把该人从群接龙移除）
+     * 取消报名：仅「报名中」的球局可取消，软删除记录 + Redis 计数 -1
      */
     @Transactional
     public GameResponse cancelRegister(Long userId, Long gameId) {
@@ -144,6 +295,7 @@ public class GameService {
         if (reg == null) {
             throw new BizException(ErrorCode.NOT_REGISTERED);
         }
+        // 逻辑删除（@TableLogic：UPDATE deleted=1，保留记录用于审计）
         registrationMapper.deleteById(reg.getId());
 
         // Redis 计数 -1（计数与实际不一致时兜底到 0，不出现负数）
@@ -153,23 +305,8 @@ public class GameService {
             redisTemplate.opsForHash().put(Constants.GAME_REG_COUNT, String.valueOf(gameId), "0");
         }
 
-        // 用报名时的称呼发取消事件：实名报名者用真名，机器人才能对上接龙里的那一条
-        String displayName = Objects.equals(reg.getAnonymous(), Constants.ANONYMOUS_NO)
-                ? realNameOf(userId)
-                : UserService.anonymousName(userId);
-        eventProducer.sendRegistrationCancel(
-                RegistrationCancelEvent.of(gameId, userId, displayName));
-
         log.info("取消报名成功: game={}, user={}", gameId, userId);
         return buildGameResponse(game);
-    }
-
-    /** 取用户真实姓名，取不到时退回匿名昵称 */
-    private String realNameOf(Long userId) {
-        User user = userMapper.selectById(userId);
-        return user != null && user.getName() != null && !user.getName().isBlank()
-                ? user.getName()
-                : UserService.anonymousName(userId);
     }
 
     /**
@@ -181,6 +318,10 @@ public class GameService {
         Game game = requireGame(gameId);
         if (game.getStatus() != Constants.GAME_STATUS_OPEN) {
             throw new BizException(ErrorCode.GAME_STATUS_ERROR);
+        }
+        // 编排方案由发起人拍板（管理员例外）
+        if (!isAdmin(operatorId) && !Objects.equals(game.getCreatorId(), operatorId)) {
+            throw new BizException(ErrorCode.FORBIDDEN, "只有发起人可以选择编排方案");
         }
         List<Registration> regs = registrationMapper.selectList(
                 new LambdaQueryWrapper<Registration>().eq(Registration::getGameId, gameId));
@@ -196,9 +337,35 @@ public class GameService {
                 ? arrangeEngine.arrangeByScheme(players, req.getSchemeId(), roundRobin)
                 : arrangeEngine.arrange(players, roundRobin);
 
+        // 已经打出比分的对阵不能丢，有战绩就不许重排
+        long scored = matchGameMapper.selectCount(new LambdaQueryWrapper<MatchGame>()
+                .eq(MatchGame::getGameId, gameId)
+                .ne(MatchGame::getWinner, 0));
+        if (scored > 0) {
+            throw new BizException(ErrorCode.GAME_STATUS_ERROR, "已有对阵录入比分，不能重新编排");
+        }
+        // 清掉上一次编排出来的空对阵，落这一批
+        matchGameMapper.delete(new LambdaQueryWrapper<MatchGame>()
+                .eq(MatchGame::getGameId, gameId)
+                .eq(MatchGame::getWinner, 0));
+        for (ArrangeEngine.ArrangeMatch m : result.matches()) {
+            MatchGame match = new MatchGame();
+            match.setGameId(gameId);
+            match.setFormat(m.format());
+            match.setTeamA(join(m.teamA()));
+            match.setTeamB(join(m.teamB()));
+            match.setScoreA(0);
+            match.setScoreB(0);
+            match.setWinner(0);
+            match.setSettleStatus(Constants.SETTLE_PENDING);
+            matchGameMapper.insert(match);
+        }
+
         game.setStatus(Constants.GAME_STATUS_ARRANGED);
+        game.setSchemeId(result.schemeId());
         gameMapper.updateById(game);
 
+        log.info("编排完成: game={}, scheme={}, 共 {} 场", gameId, result.schemeName(), result.matches().size());
         return ArrangeResponse.builder()
                 .gameId(gameId)
                 .schemeId(result.schemeId())
@@ -214,6 +381,92 @@ public class GameService {
                 .build();
     }
 
+    /**
+     * 球局对阵（编排结果 + 现场比分）：所有人可见，用来对着场地打球、录分。
+     * 未登录访客只看到显示昵称。
+     */
+    public GameMatchesResponse matches(Long gameId) {
+        Game game = requireGame(gameId);
+        List<MatchGame> list = matchGameMapper.selectList(
+                new LambdaQueryWrapper<MatchGame>()
+                        .eq(MatchGame::getGameId, gameId)
+                        .orderByAsc(MatchGame::getId));
+        Map<Long, String> displayNames = displayNamesOf(gameId);
+        List<GameMatchesResponse.MatchItem> items = list.stream()
+                .map(m -> {
+                    List<Long> teamA = split(m.getTeamA());
+                    List<Long> teamB = split(m.getTeamB());
+                    return GameMatchesResponse.MatchItem.builder()
+                            .matchId(m.getId())
+                            .format(m.getFormat())
+                            .teamA(teamA)
+                            .teamB(teamB)
+                            .teamANames(teamA.stream().map(id -> name(displayNames, id)).toList())
+                            .teamBNames(teamB.stream().map(id -> name(displayNames, id)).toList())
+                            .scoreA(m.getScoreA())
+                            .scoreB(m.getScoreB())
+                            .winner(m.getWinner())
+                            .settled(Objects.equals(m.getSettleStatus(), Constants.SETTLE_DONE))
+                            .build();
+                })
+                .toList();
+        int finished = (int) items.stream()
+                .filter(i -> i.getWinner() != null && i.getWinner() != 0)
+                .count();
+        return GameMatchesResponse.builder()
+                .gameId(gameId)
+                .status(game.getStatus())
+                .schemeId(game.getSchemeId())
+                .schemeName(ArrangeEngine.schemeNameOf(game.getSchemeId()))
+                .finishedCount(finished)
+                .totalCount(items.size())
+                .matches(items)
+                .build();
+    }
+
+    /**
+     * 轮排对阵里 userId 对应的展示名。
+     * 轮排使用真实信息：登录用户一律看真实姓名（与是否匿名报名无关）；未登录访客只看匿名昵称。
+     */
+    private Map<Long, String> displayNamesOf(Long gameId) {
+        List<Registration> regs = registrationMapper.selectList(
+                new LambdaQueryWrapper<Registration>().eq(Registration::getGameId, gameId));
+        Map<Long, User> userMap = loadUserMap(regs);
+        Map<Long, String> realNames = loadRealNames(regs, userMap);
+        Map<Long, String> out = new HashMap<>();
+        for (Registration r : regs) {
+            String realName = realNames.get(r.getUserId());
+            out.put(r.getUserId(), realName != null ? realName : "球友" + r.getUserId());
+        }
+        return out;
+    }
+
+    private static String name(Map<Long, String> names, Long userId) {
+        return names.getOrDefault(userId, "球友#" + userId);
+    }
+
+    private static List<Long> split(String ids) {
+        if (ids == null || ids.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(ids.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(Long::valueOf)
+                .toList();
+    }
+
+    private static String join(Iterable<Long> ids) {
+        StringBuilder sb = new StringBuilder();
+        for (Long id : ids) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(id);
+        }
+        return sb.toString();
+    }
+
     private Game requireGame(Long gameId) {
         Game game = gameMapper.selectById(gameId);
         if (game == null) {
@@ -222,48 +475,132 @@ public class GameService {
         return game;
     }
 
+    /**
+     * 标题唯一校验（业务层主动报错，前端友好提示）。
+     *
+     * @param excludeId 排除的球局 id（编辑场景传自己，新增场景传 null）
+     */
+    private void checkTitleUnique(Long excludeId, String title) {
+        if (title == null || title.isBlank()) return;
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Game> w =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        w.eq(Game::getTitle, title.trim());
+        if (excludeId != null) {
+            w.ne(Game::getId, excludeId);
+        }
+        Long cnt = gameMapper.selectCount(w);
+        if (cnt != null && cnt > 0) {
+            throw new BizException(ErrorCode.GAME_TITLE_DUPLICATE);
+        }
+    }
+
+    /**
+     * 前端标题查重接口：公开（发布前预先校验用），返回 { available: boolean }
+     */
+    public boolean titleAvailable(String title, Long excludeId) {
+        if (title == null || title.isBlank()) return true;
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Game> w =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        w.eq(Game::getTitle, title.trim());
+        if (excludeId != null) {
+            w.ne(Game::getId, excludeId);
+        }
+        Long cnt = gameMapper.selectCount(w);
+        return cnt == null || cnt == 0;
+    }
+
     private GameResponse buildGameResponse(Game game) {
         List<Registration> regs = registrationMapper.selectList(
                 new LambdaQueryWrapper<Registration>().eq(Registration::getGameId, game.getId()));
-        // 真实姓名只对登录用户展示：球局详情是公开接口，未登录访客一律看匿名昵称
-        Map<Long, String> realNames = loadRealNames(regs, UserContext.get() != null);
+        Map<Long, User> userMap = loadUserMap(regs);
+        Map<Long, String> realNames = loadRealNames(regs, userMap);
+
+        // 单独查发起人（发起人可能未在 registrations 里）
+        String creatorName = null;
+        String creatorAvatar = null;
+        Integer creatorGender = null;
+        Integer creatorRating = null;
+        if (game.getCreatorId() != null) {
+            User cu = userMapper.selectById(game.getCreatorId());
+            if (cu != null) {
+                creatorName = cu.getName();
+                creatorAvatar = cu.getAvatar();
+                creatorGender = cu.getGender();
+                creatorRating = cu.getRating();
+            }
+        }
+
+        // 单独查关联球场（court 表，取 lat/lng 供前端地图展示）
+        String courtName = null;
+        java.math.BigDecimal courtLat = null;
+        java.math.BigDecimal courtLng = null;
+        if (game.getCourtId() != null) {
+            com.yuyue.entity.Court ct = courtMapper.selectById(game.getCourtId());
+            if (ct != null) {
+                courtName = ct.getName();
+                courtLat = ct.getLat();
+                courtLng = ct.getLng();
+            }
+        }
+
         return GameResponse.builder()
                 .id(game.getId())
                 .title(game.getTitle())
+                .mode(game.getMode())
                 .location(game.getLocation())
+                .courtId(game.getCourtId())
+                .courtName(courtName)
+                .courtLat(courtLat)
+                .courtLng(courtLng)
+                .remark(game.getRemark())
                 .playDate(game.getPlayDate())
                 .startTime(game.getStartTime())
                 .endTime(game.getEndTime())
                 .maxPlayers(game.getMaxPlayers())
+                .courtCount(game.getCourtCount())
+                .schemeId(game.getSchemeId())
                 .status(game.getStatus())
                 .creatorId(game.getCreatorId())
+                .hidden(game.getHidden() == null ? 0 : game.getHidden())
+                .creatorName(creatorName)
+                .creatorAvatar(creatorAvatar)
+                .creatorGender(creatorGender)
+                .creatorRating(creatorRating)
+                .cover(game.getCover())
                 .registeredCount(regs.size())
                 .registrations(regs.stream()
                         .map(r -> {
-                            boolean anonymous =
-                                    !Objects.equals(r.getAnonymous(), Constants.ANONYMOUS_NO);
-                            String anonymousName = UserService.anonymousName(r.getUserId());
-                            String realName = realNames.get(r.getUserId());
+                            User u = userMap.get(r.getUserId());
+                            String name = u != null && u.getName() != null ? u.getName() : "球友" + r.getUserId();
                             return GameResponse.RegistrationItem.builder()
                                     .userId(r.getUserId())
-                                    .anonymousName(anonymousName)
-                                    .displayName(anonymous || realName == null ? anonymousName : realName)
-                                    .anonymous(anonymous ? Constants.ANONYMOUS_YES : Constants.ANONYMOUS_NO)
+                                    .displayName(name)
+                                    .avatar(u != null ? u.getAvatar() : null)
                                     .gender(r.getGender())
-                                    .rating(r.getRating())
+                                    // 用 user 表最新 rating，不用 registration 快照
+                                    .rating(u != null ? u.getRating() : r.getRating())
                                     .build();
                         })
                         .toList())
                 .build();
     }
 
-    /** 批量取报名人真实姓名；未登录或名单为空时返回空 Map（不查库） */
-    private Map<Long, String> loadRealNames(List<Registration> regs, boolean viewerLoggedIn) {
-        if (!viewerLoggedIn || regs.isEmpty()) {
+    /** 批量取报名用户完整信息，避免多次查询用户表 */
+    private Map<Long, User> loadUserMap(List<Registration> regs) {
+        if (regs.isEmpty()) {
             return Map.of();
         }
         List<Long> userIds = regs.stream().map(Registration::getUserId).distinct().toList();
         return userMapper.selectBatchIds(userIds).stream()
+                .collect(Collectors.toMap(User::getId, u -> u, (a, b) -> a));
+    }
+
+    /** 批量取报名人真实姓名 */
+    private Map<Long, String> loadRealNames(List<Registration> regs, Map<Long, User> userMap) {
+        if (regs.isEmpty()) {
+            return Map.of();
+        }
+        return userMap.values().stream()
                 .filter(u -> u.getName() != null && !u.getName().isBlank())
                 .collect(Collectors.toMap(User::getId, User::getName, (a, b) -> a));
     }

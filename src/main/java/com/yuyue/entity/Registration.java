@@ -1,7 +1,9 @@
 package com.yuyue.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
@@ -30,6 +32,14 @@ public class Registration {
 
     /** 1 匿名 / 0 实名（Constants.ANONYMOUS_*） */
     private Integer anonymous;
+
+    /** 逻辑删除：0 有效报名 / 1 已取消（与全局 logic-delete 配置一致） */
+    @TableLogic
+    private Integer deleted;
+
+    /** 生成列（数据库维护）：有效报名恒为 1、取消后为 NULL，用于软删除兼容的唯一约束，实体侧只读忽略 */
+    @TableField(exist = false)
+    private Long activeMarker;
 
     private LocalDateTime createTime;
 }

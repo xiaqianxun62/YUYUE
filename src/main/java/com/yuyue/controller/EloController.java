@@ -22,13 +22,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("elo")
 @RequiredArgsConstructor
-@Tag(name = "ELO 试算", description = "输入男女人数与积分，模拟编排与积分结算，不写库")
+@Tag(name = "ELO 计算", description = "输入男女人数与积分，模拟编排与积分结算，不写库")
 public class EloController {
 
     private final EloSimulateService eloSimulateService;
     private final EloRulesService eloRulesService;
 
-    @Operation(summary = "ELO 试算", description = "复用真实编排引擎与 ELO 计算器，输出方案与积分变化")
+    @Operation(summary = "ELO 计算", description = "复用真实编排引擎与 ELO 计算器，输出方案与积分变化")
     @PostMapping("simulate")
     public ApiResponse<EloSimulateResponse> simulate(@Valid @RequestBody EloSimulateRequest req) {
         return ApiResponse.ok(eloSimulateService.simulate(req));

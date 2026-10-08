@@ -1,7 +1,7 @@
 package com.yuyue.common;
 
 /**
- * 全局常量：Redis Key、Kafka Topic、业务枚举值
+ * 全局常量：Redis Key、业务枚举值
  */
 public final class Constants {
 
@@ -19,17 +19,6 @@ public final class Constants {
     /** JWT 黑名单（登出后 token 失效）：member=token */
     public static final String JWT_BLACKLIST = "yuyue:jwt:blacklist";
 
-    /* ---------- Kafka Topics ---------- */
-
-    /** 报名事件：机器人消费后同步微信群接龙 */
-    public static final String TOPIC_REGISTRATION = "yuyue-registration";
-
-    /** 取消报名事件：机器人消费后把该人从群接龙移除 */
-    public static final String TOPIC_REGISTRATION_CANCEL = "yuyue-registration-cancel";
-
-    /** 对局结算事件：消费后落库积分变更 */
-    public static final String TOPIC_MATCH_SETTLE = "yuyue-match-settle";
-
     /* ---------- 枚举值 ---------- */
 
     /** 性别：男 */
@@ -39,8 +28,15 @@ public final class Constants {
 
     /** 球局状态：报名中 */
     public static final int GAME_STATUS_OPEN = 0;
-    /** 球局状态：已编排 */
+    /** 球局状态：已编排（对阵已生成，等待打球 / 计分） */
     public static final int GAME_STATUS_ARRANGED = 1;
+    /** 球局状态：已结束（所有对阵都已录入比分） */
+    public static final int GAME_STATUS_FINISHED = 2;
+
+    /** 球局发布模式：预报名（定好时间地点，提前约人） */
+    public static final int GAME_MODE_PREBOOK = 0;
+    /** 球局发布模式：现场报名（只定人数与场地，人齐后由发起人编排，现场开打） */
+    public static final int GAME_MODE_ONSITE = 1;
 
     /** 对局形式：单打/男双/女双/混双 */
     public static final int FORMAT_SINGLES = 1;
@@ -53,6 +49,22 @@ public final class Constants {
     /** 对局胜方：A队 / B队 */
     public static final int WINNER_A = 1;
     public static final int WINNER_B = 2;
+
+    /**
+     * 轮排的性别组队规则（只影响双打怎么配队；单打时不生效）
+     * 0 不分性别（按积分均衡搭配） 1 尽量男双 2 尽量女双 3 尽量混双（每队一男一女）
+     * 4 男女分场（男双 + 女双同时进行，按男女比分配场地，互不干扰）
+     */
+    public static final int GENDER_RULE_ANY = 0;
+    public static final int GENDER_RULE_MEN = 1;
+    public static final int GENDER_RULE_WOMEN = 2;
+    public static final int GENDER_RULE_MIXED = 3;
+    /** 男女分场：按报名男女比分配场地，部分场地开男双、其余开女双，男女队员互不干扰 */
+    public static final int GENDER_RULE_SEPARATE = 4;
+
+    /** 用户管理员标记 */
+    public static final int ADMIN_NO = 0;
+    public static final int ADMIN_YES = 1;
 
     /** 报名展示方式：匿名（对外只显示「球友#xxxx」） */
     public static final int ANONYMOUS_YES = 1;

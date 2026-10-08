@@ -11,8 +11,8 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Swagger / OpenAPI 3 文档配置
  * <p>
- * UI 地址：http://localhost:8080/swagger-ui.html
- * JSON 地址：http://localhost:8080/v3/api-docs
+ * UI 地址：http://localhost:8080/api/swagger-ui.html
+ * JSON 地址：http://localhost:8080/api/v3/api-docs
  */
 @Configuration
 public class OpenApiConfig {

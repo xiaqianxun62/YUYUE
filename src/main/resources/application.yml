@@ -1,13 +1,27 @@
 server:
   port: 8080
+  servlet:
+    # 全站接口统一前缀：/auth、/games 等 → /api/auth、/api/games（静态资源 /uploads 同步变为 /api/uploads）
+    context-path: /api
+  tomcat:
+    # 让 access log 落到进程工作目录下的 logs/，而不是临时目录
+    basedir: .
+    accesslog:
+      # 记录每次请求的后端处理耗时（%D=毫秒），用来区分「后端慢」还是「小程序/工具链路慢」
+      enabled: true
+      directory: logs
+      prefix: access
+      suffix: .log
+      pattern: "%t %a \"%r\" %s %Dms"
+
 
 spring:
   application:
     name: yuyue-backend
   datasource:
-    url: jdbc:mariadb://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/yuyue?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-    username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:123}
+    url: jdbc:mariadb://${MYSQL_HOST:42.193.190.232}:${MYSQL_PORT:3306}/yuyue?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:265147}
+    password: ${MYSQL_PASSWORD:265147}
     driver-class-name: org.mariadb.jdbc.Driver
     hikari:
       minimum-idle: 5
@@ -19,7 +33,9 @@ spring:
     encoding: UTF-8
     # 已有表但无迁移记录时自动建立基线，避免报 "non-empty schema but no schema history table"
     baseline-on-migrate: true
-    validate-on-migrate: true
+    # 允许迁移版本号不连续、跳过 orphan 记录（线上 schema_history 里有一个 V17 本地缺失）
+    validate-on-migrate: false
+    out-of-order: true
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -31,27 +47,6 @@ spring:
         pool:
           max-active: 16
           max-idle: 8
-  kafka:
-    bootstrap-servers: ${KAFKA_SERVERS:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-      acks: all
-      retries: 3
-      properties:
-        # broker 不可用时最多阻塞 3s 即抛错，避免报名/上报接口被拖死（默认 60s）
-        max.block.ms: 3000
-    consumer:
-      group-id: yuyue-group
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: com.yuyue.*
-    listener:
-      ack-mode: record
-      # 首次启动 topic 不存在时不让容器反复重启（由 broker auto.create.topics 兜底）
-      missing-topics-fatal: false
   # 热部署（仅开发期；生产 jar 不含 devtools，自动失效）
   devtools:
     restart:
@@ -61,6 +56,17 @@ spring:
       quiet-period: 1s
     livereload:
       enabled: true
+  # multipart 文件上传：个人头像上传接口
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 100MB
+      # 显式指定临时文件目录，绕开 Tomcat 默认按 context-path 拼的
+      # /work/Tomcat/localhost/api（宝塔面板下该路径无权限创建，导致所有 multipart 解析失败）。
+      # 临时目录和业务上传目录统一放在宝塔 uploads 下，子目录 tmp/ 隔离，
+      # 避免 Spring Boot 自动创建 /api 子目录的权限问题。
+      location: /www/wwwroot/uploads/tmp
+      #location: /uploads
 
 # Swagger UI: http://localhost:8080/swagger-ui.html   OpenAPI JSON: /v3/api-docs
 springdoc:
@@ -86,10 +92,6 @@ mybatis-plus:
       logic-not-delete-value: 0
 
 yuyue:
-  kafka:
-    # 本地没起 Kafka 时设 KAFKA_ENABLED=false：不创建消费者容器、事件降级为日志，
-    # 报名 / 上报对局等接口照常可用（只是不同步群接龙、不异步结算）
-    enabled: ${KAFKA_ENABLED:true}
   swagger:
     auto-auth:
       # 给 Swagger UI 注入自动登录脚本：登录成功后自动持有 JWT
@@ -99,17 +101,26 @@ yuyue:
     expire-hours: 72
   wx:
     # 微信小程序：填上真实 appid / secret 才能真机登录；留空时只能用 mock code 联调
-    appid: ${WX_APPID:}
-    secret: ${WX_SECRET:}
+    appid: wxd3c7f28a9a1d58e2
+    secret: 6fd23580cb5da95b091596140c4c30fa
     mock-enabled: ${WX_MOCK_ENABLED:true}
   elo:
     default-rating: 1200
     k-new: 40       # ≤20 场
     k-mid: 24       # 21-60 场
     k-pro: 16       # >60 场
+  # 个人头像上传：保存目录、对外 URL 前缀、单文件大小上限
+  upload:
+    # 生产环境统一用宝塔 uploads 目录（与 nginx 静态映射、multipart 临时目录同根）；
+    # 本地开发没这个绝对路径时 UserService 里 createDirectories 会自动创建。
+    dir: /www/wwwroot/uploads
+    url-prefix: /uploads
+    max-size: 5242880
 
 logging:
   level:
-    # Kafka 没启动时 NetworkClient 会持续刷 WARN，降到 ERROR 免得刷屏；
-    # 排查连接问题时把它改回 WARN 即可
-    org.apache.kafka.clients.NetworkClient: ERROR
+    # Spring 对「已被 @ExceptionHandler 处理」的异常仍会打一条 Resolved [...] WARN，
+    # 401 / 参数校验失败属于预期内的业务异常，不必刷屏（真正的堆栈由 handleOther 打 error）
+    org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver: ERROR
+    # 想看是哪个接口 401，把这行改成 DEBUG，日志会打印 method + uri
+    com.yuyue.web.AuthInterceptor: WARN

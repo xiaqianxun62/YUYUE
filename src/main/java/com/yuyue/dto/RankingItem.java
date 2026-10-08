@@ -9,12 +9,7 @@ public class RankingItem {
 
     private Long userId;
 
-    /** 匿名展示名（对外不含真实姓名） */
-    private String anonymousName;
-
     private String name;
-
-    private String college;
 
     private Integer rating;
 
@@ -23,4 +18,7 @@ public class RankingItem {
     private Integer loss;
 
     private Integer rank;
+
+    /** 用户头像相对路径（/uploads/xxx），为空时前端显示首字母占位 */
+    private String avatar;
 }

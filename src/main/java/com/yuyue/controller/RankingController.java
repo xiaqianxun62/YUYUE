@@ -14,12 +14,12 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 积分榜：官网与小程序同源（Redis ZSet 热点读）
+ * 积分榜：官网与小程序同源
  */
 @RestController
 @RequestMapping("ranking")
 @RequiredArgsConstructor
-@Tag(name = "积分榜", description = "Redis ZSet 热点读，官网与小程序同源")
+@Tag(name = "积分榜", description = "官网与小程序同源")
 public class RankingController {
 
     private final RankingService rankingService;
@@ -28,5 +28,12 @@ public class RankingController {
     @GetMapping
     public ApiResponse<List<RankingItem>> top(@RequestParam(defaultValue = "10") int n) {
         return ApiResponse.ok(rankingService.topN(n));
+    }
+
+    @Operation(summary = "手动重建榜单", description = "从 MySQL 全量重建（只保留打过比赛的用户）")
+    @GetMapping("rebuild")
+    public ApiResponse<String> rebuild() {
+        rankingService.rebuildFromDb();
+        return ApiResponse.ok("rebuilt");
     }
 }

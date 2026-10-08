@@ -23,6 +23,12 @@ public class MatchGame {
     /** 1单打 2男双 3女双 4混双 */
     private Integer format;
 
+    /** 轮排轮次：0 表示不是轮排生成的对阵 */
+    private Integer roundNo = 0;
+
+    /** 轮排场地号，从 1 开始；0 表示不是轮排生成的对阵 */
+    private Integer court = 0;
+
     /** A队成员id，逗号分隔（1个=单打，2个=双打） */
     private String teamA;
 

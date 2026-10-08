@@ -1,6 +1,6 @@
 # 数羽 SHUYU - 后端服务
 
-校园羽毛球球局系统后端：**Java 17 + Spring Boot 3.3 + Redis + Kafka + MySQL + MyBatis-Plus**
+校园羽毛球球局系统后端：**Java 17 + Spring Boot 3.3 + Redis + MySQL + MyBatis-Plus**
 
 ## 模块结构
 
@@ -14,9 +14,7 @@ com.yuyue
 │   ├── EloCalculator    # ELO 计算（K 因子衰减 / 双打组合期望 / 防刷）
 │   └── ArrangeEngine    # 自动编排（6 套方案按性别构成自动过滤）
 ├── entity          # MyBatis-Plus 实体
-├── event           # Kafka 事件载荷（报名 / 对局结算）
 ├── exception       # BizException
-├── kafka           # EventProducer / RegistrationConsumer(clawbot) / MatchSettleConsumer
 ├── mapper          # MyBatis-Plus Mapper
 ├── service         # UserService / GameService / MatchService / RankingService
 ├── util            # JwtUtil
@@ -45,13 +43,9 @@ com.yuyue
 | ⑤ | 混搭·混双优先 | 男数 > 女数（男多 1 时 1 局男双 vs 混双） |
 | ⑥ | 混搭·同性别优先 | 女 > 男，且男 ≥2 女 ≥2 |
 
-### Kafka 异步链路
+### 对局结算（同步）
 
-| Topic | 生产方 | 消费方 | 用途 |
-|-------|--------|--------|------|
-| `yuyue-registration` | 报名接口 | RegistrationConsumer | **clawbot 同步微信群接龙**（当前为日志桩，替换 `pushToWechatGroup` 即可接入真实机器人）；事件带 `displayName`：实名报名=真实姓名，匿名=「球友#xxxx」 |
-| `yuyue-registration-cancel` | 取消报名接口 | RegistrationConsumer | **clawbot 把该人从群接龙移除**（日志桩，替换 `removeFromWechatGroup`） |
-| `yuyue-match-settle` | 对局上报 | MatchSettleConsumer | 异步结算 ELO：更新 user、写 rating_history、刷 Redis 榜单（幂等，重投不重复加分） |
+上报对局结果与现场计分均在**同一事务内同步**调用 `MatchSettleService`：更新 user 积分、写 rating_history、刷 Redis 榜单。按 `settle_status` 幂等，重复提交（改分）不会重复加分。
 
 ### Redis
 
@@ -63,62 +57,41 @@ com.yuyue
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/auth/register` | 学号+姓名注册（校园认证） |
-| POST | `/auth/login` | 登录，返回 JWT |
-| GET  | `/auth/me` | 当前用户信息 |
-| PUT  | `/auth/profile` | 编辑个人信息（姓名 / 性别 / 学院 / 学号，留空=不修改）；`POST /auth/profile` 同逻辑 |
-| POST | `/games` | 发布球局 |
-| GET  | `/games` | 球局列表 |
-| GET  | `/games/{id}` | 球局详情（报名列表对外匿名） |
-| POST | `/games/{id}/register` | 报名（body 可选 `anonymous:false` = 实名）→ Kafka → clawbot 同步群接龙 |
-| DELETE | `/games/{id}/register` | 取消报名（仅报名中可取消）→ Kafka → clawbot 从群接龙移除 |
-| POST | `/games/{id}/arrange` | 自动编排（6 方案过滤） |
-| POST | `/matches` | 上报对局结果 → Kafka 异步结算 ELO |
-| GET  | `/ranking?n=10` | 积分榜 Top N |
+| POST | `/api/auth/register` | 账号+姓名注册 |
+| POST | `/api/auth/login` | 登录，返回 JWT |
+| GET  | `/api/auth/me` | 当前用户信息 |
+| PUT  | `/api/auth/profile` | 编辑个人信息（姓名 / 性别 / 账号，留空=不修改）；`POST /api/auth/profile` 同逻辑 |
+| POST | `/api/games` | 发布球局 |
+| GET  | `/api/games` | 球局列表 |
+| GET  | `/api/games/{id}` | 球局详情（报名列表对外匿名） |
+| POST | `/api/games/{id}/register` | 报名（body 可选 `anonymous:false` = 实名） |
+| DELETE | `/api/games/{id}/register` | 取消报名（仅报名中可取消） |
+| POST | `/api/games/{id}/arrange` | 自动编排（6 方案过滤） |
+| POST | `/api/matches` | 上报对局结果，同步结算 ELO |
+| GET  | `/api/ranking?n=10` | 积分榜 Top N |
 
-除 `/auth/**` 外均需 `Authorization: Bearer <token>`。
+除 `/api/auth/**` 外均需 `Authorization: Bearer <token>`。
 
 ## 接口文档（Swagger UI）
 
-应用启动后访问：**http://localhost:8080/swagger-ui.html**
+应用启动后访问：**http://localhost:8080/api/swagger-ui.html**
 
-- 先调 `POST /auth/login` 拿到 token，点页面右上角 **Authorize** 填入即可调试受保护接口（粘贴时不需要带 `Bearer ` 前缀，UI 会自动补上）
-- OpenAPI JSON：`/v3/api-docs`
-- 文档相关路径（`/swagger-ui/**`、`/v3/api-docs/**`）已在 `WebMvcConfig` 中放行，不会被登录拦截器拦住
+- 先调 `POST /api/auth/login` 拿到 token，点页面右上角 **Authorize** 填入即可调试受保护接口（粘贴时不需要带 `Bearer ` 前缀，UI 会自动补上）
+- OpenAPI JSON：`/api/v3/api-docs`
+- 文档相关路径（对外为 `/api/swagger-ui/**`、`/api/v3/api-docs/**`；拦截器按 context-path 之后的路径匹配，即 `WebMvcConfig` 中放行的 `/swagger-ui/**`、`/v3/api-docs/**`）不会被登录拦截器拦住
 
 ## 快速启动
 
 ```bash
-# 1. 中间件（docker compose 或本机已有 MySQL/Redis/Kafka 可跳过）
+# 1. 中间件（docker compose 或本机已有 MySQL/Redis 可跳过）
 docker run -d --name yuyue-mysql  -e MYSQL_ROOT_PASSWORD=root -p 3306:3306 mysql:8.0
 docker run -d --name yuyue-redis  -p 6379:6379 redis:7
-docker run -d --name yuyue-kafka -p 9092:9092 \
-  -e KAFKA_CFG_NODE_ID=0 -e KAFKA_CFG_PROCESS_ROLES=controller,broker \
-  -e KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093 \
-  -e KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
-  -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
-  -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@localhost:9093 \
-  bitnami/kafka:3.7
 
 # 2. 启动（数据库 + 表结构由 Flyway 自动创建，无需手动执行 SQL）
 mvn spring-boot:run
 ```
 
-### 本地没起 Kafka 也能跑
-
-Kafka 是**可选**依赖。没起 broker 时连接日志会刷屏（`Connection to node -1 ... could not be established`），设环境变量关掉即可：
-
-```bash
-# PowerShell
-$env:KAFKA_ENABLED="false"; mvn spring-boot:run
-# 或 IDEA：Run/Debug Configurations → Environment variables 加 KAFKA_ENABLED=false
-```
-
-关闭后的行为：不注册任何监听容器、不建 Kafka 连接，报名 / 上报对局等接口照常成功，
-事件降级为一行 WARN 日志（不同步群接龙、不异步结算 ELO，对局保持 `settle_status=0`）。
-要跑完整链路就按上面的 docker 命令起 Kafka，并保持 `KAFKA_ENABLED=true`（默认）。
-
-环境变量：`MYSQL_HOST` `MYSQL_PORT` `MYSQL_USER` `MYSQL_PASSWORD` `REDIS_HOST` `REDIS_PORT` `KAFKA_SERVERS` `KAFKA_ENABLED` `JWT_SECRET`
+环境变量：`MYSQL_HOST` `MYSQL_PORT` `MYSQL_USER` `MYSQL_PASSWORD` `REDIS_HOST` `REDIS_PORT` `JWT_SECRET`
 
 ## 数据库迁移（Flyway）
 

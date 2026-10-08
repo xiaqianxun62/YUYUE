@@ -1,6 +1,7 @@
 package com.yuyue.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -9,7 +10,7 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 /**
- * 用户（学号 + 姓名校园认证）
+ * 用户（账号 + 姓名认证，或微信 openid 登录）
  */
 @Data
 @TableName("`user`")
@@ -18,8 +19,9 @@ public class User {
     @TableId(type = IdType.AUTO)
     private Long id;
 
-    /** 学号 */
-    private String studentNo;
+    /** 登录账号（账号密码登录用；微信用户未绑定时为空） */
+    @TableField("`account`")
+    private String account;
 
     /** 微信小程序 openid，未绑定微信时为空 */
     private String wxOpenid;
@@ -30,8 +32,11 @@ public class User {
     /** 0未知 1男 2女 */
     private Integer gender;
 
-    /** 学院 */
-    private String college;
+    /** 个人头像 URL */
+    private String avatar;
+
+    /** 0 普通用户 1 管理员（管理员可改站点文案、管理任何球局） */
+    private Integer isAdmin;
 
     private String passwordHash;
 

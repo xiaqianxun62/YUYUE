@@ -15,6 +15,6 @@ public class UploadProperties {
     /** 对外暴露的 URL 前缀 */
     private String urlPrefix = "/uploads";
 
-    /** 单文件大小上限（字节），默认 5MB */
-    private long maxSize = 5 * 1024 * 1024;
+    /** 单文件大小上限（字节），默认 10MB */
+    private long maxSize = 10 * 1024 * 1024;
 }

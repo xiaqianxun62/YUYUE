@@ -115,7 +115,7 @@ yuyue:
     # 本地开发没这个绝对路径时 UserService 里 createDirectories 会自动创建。
     dir: /www/wwwroot/uploads
     url-prefix: /uploads
-    max-size: 5242880
+    max-size: 10485760
 
 logging:
   level:

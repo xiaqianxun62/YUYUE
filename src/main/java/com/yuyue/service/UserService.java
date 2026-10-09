@@ -305,6 +305,7 @@ public class UserService {
                 .rating(user.getRating())
                 .gamesPlayed(user.getGamesPlayed())
                 .isAdmin(user.getIsAdmin() != null && user.getIsAdmin() == 1)
+                .isVerified(user.getIsVerified() != null && user.getIsVerified() == 1)
                 .build();
     }
 

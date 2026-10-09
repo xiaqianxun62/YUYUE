@@ -531,16 +531,28 @@ public class GameService {
         }
 
         // 单独查关联球场（court 表，取 lat/lng 供前端地图展示）
+        // 优先 game.court_id 关联；兜底：court_id 为空时按 location 模糊匹配 court.name
         String courtName = null;
         java.math.BigDecimal courtLat = null;
         java.math.BigDecimal courtLng = null;
+        Long courtIdOut = game.getCourtId();
+
+        com.yuyue.entity.Court ct = null;
         if (game.getCourtId() != null) {
-            com.yuyue.entity.Court ct = courtMapper.selectById(game.getCourtId());
+            ct = courtMapper.selectById(game.getCourtId());
+        } else if (game.getLocation() != null && !game.getLocation().isBlank()) {
+            // 兜底：按 location 文本模糊匹配 court.name（历史球局 court_id 可能为 NULL）
+            ct = courtMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.yuyue.entity.Court>()
+                    .like(com.yuyue.entity.Court::getName, game.getLocation().trim())
+                    .last("LIMIT 1"));
             if (ct != null) {
-                courtName = ct.getName();
-                courtLat = ct.getLat();
-                courtLng = ct.getLng();
+                courtIdOut = ct.getId();
             }
+        }
+        if (ct != null) {
+            courtName = ct.getName();
+            courtLat = ct.getLat();
+            courtLng = ct.getLng();
         }
 
         return GameResponse.builder()
@@ -548,7 +560,7 @@ public class GameService {
                 .title(game.getTitle())
                 .mode(game.getMode())
                 .location(game.getLocation())
-                .courtId(game.getCourtId())
+                .courtId(courtIdOut)
                 .courtName(courtName)
                 .courtLat(courtLat)
                 .courtLng(courtLng)

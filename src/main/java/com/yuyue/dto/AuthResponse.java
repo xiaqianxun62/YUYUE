@@ -28,6 +28,9 @@ public class AuthResponse {
     /** 是否管理员（后端 user.isAdmin） */
     private Boolean isAdmin;
 
+    /** 身份校验是否已通过 */
+    private Boolean isVerified;
+
     /** 是否本次微信登录新建的用户（前端据此引导完善资料） */
     private Boolean newUser;
 }

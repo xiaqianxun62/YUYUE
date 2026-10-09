@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.lang.NonNull;
 
 @Configuration
 @RequiredArgsConstructor
@@ -31,7 +32,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
     };
 
     @Override
-    public void addInterceptors(InterceptorRegistry registry) {
+    public void addInterceptors(@NonNull InterceptorRegistry registry) {
         // 鉴权拦截器先执行（order 0），访问日志拦截器后注册（order 1）：
         // afterCompletion 按注册逆序回调，访问日志先输出、鉴权拦截器最后清理 UserContext
         registry.addInterceptor(authInterceptor)
@@ -73,7 +74,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     // 个人头像静态资源映射：/uploads/** → 本地上传目录
     @Override
-    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+    public void addResourceHandlers(@NonNull ResourceHandlerRegistry registry) {
         String dir = uploadProperties.getDir();
         String location = dir.endsWith("/") ? "file:" + dir : "file:" + dir + "/";
         registry.addResourceHandler(uploadProperties.getUrlPrefix() + "/**")

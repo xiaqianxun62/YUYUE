@@ -51,4 +51,7 @@ public class GameCreateRequest {
     /** 球局备注 / 说明（可选，给球友的补充信息，最多 500 字） */
     @jakarta.validation.constraints.Size(max = 500, message = "备注不能超过 500 字")
     private String remark;
+
+    /** 是否仅认证用户可见（默认 false，所有人可见） */
+    private Boolean isVerified;
 }

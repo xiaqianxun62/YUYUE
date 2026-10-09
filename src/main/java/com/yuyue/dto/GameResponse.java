@@ -56,6 +56,9 @@ public class GameResponse {
     /** 1=已隐藏（不在首页列表显示） */
     private Integer hidden;
 
+    /** 1=仅认证用户可见，0=所有人可见 */
+    private Integer isVerified;
+
     /** 发起人昵称（从 user 表直接查，不依赖 registrations） */
     private String creatorName;
 

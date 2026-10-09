@@ -145,6 +145,7 @@ public class GameService {
         game.setCover(req.getCover());
         game.setMaxPlayers(req.getMaxPlayers());
         game.setCourtCount(req.getCourtCount() == null ? 2 : req.getCourtCount());
+        game.setIsVerified(req.getIsVerified() != null && req.getIsVerified() ? 1 : 0);
         if (mode == Constants.GAME_MODE_PREBOOK) {
             if (req.getPlayDate() == null) {
                 throw new BizException(ErrorCode.PARAM_ERROR, "打球日期不能为空");
@@ -169,17 +170,30 @@ public class GameService {
     /**
      * 球局列表：status 先分组（报名中 → 已编排 → 已结束 → 已取消），
      * 组内按 playDate 升序（最近的排最前）。
-     * 这样所有"可参与"的球局排在前面，其中又以离现在最近的为先；
-     * 已结束/已取消的排后面，避免用户一进首页看到一堆历史战报。
+     * 认证可见性过滤：未登录 / 非认证用户只返回 is_verified=0 的球局；
+     * 认证用户返回全部（is_verified=1 的认证球局 + is_verified=0 的公开球局）。
      */
     public List<GameResponse> list() {
-        return gameMapper.selectList(
-                        new LambdaQueryWrapper<Game>()
-                                .eq(Game::getHidden, 0)
-                                .orderByAsc(Game::getStatus)
-                                .orderByAsc(Game::getPlayDate)
-                                .orderByAsc(Game::getStartTime))
+        LambdaQueryWrapper<Game> qw = new LambdaQueryWrapper<Game>()
+                .eq(Game::getHidden, 0);
+        // 认证过滤：看当前登录用户身份
+        Long userId = UserContext.get();
+        boolean isVerifiedUser = userId != null && isVerifiedUser(userId);
+        if (!isVerifiedUser) {
+            // 非认证用户 / 未登录：只能看公开球局
+            qw.eq(Game::getIsVerified, 0);
+        }
+        return gameMapper.selectList(qw
+                        .orderByAsc(Game::getStatus)
+                        .orderByAsc(Game::getPlayDate)
+                        .orderByAsc(Game::getStartTime))
                 .stream().map(this::buildGameResponse).toList();
+    }
+
+    /** 判断用户是否通过 SHUKE 认证 */
+    private boolean isVerifiedUser(Long userId) {
+        User u = userMapper.selectById(userId);
+        return u != null && u.getIsVerified() != null && u.getIsVerified() == 1;
     }
 
     /** 发起人 / 管理员：隐藏球局（不再首页显示，但详情页仍可访问） */
@@ -574,6 +588,7 @@ public class GameService {
                 .status(game.getStatus())
                 .creatorId(game.getCreatorId())
                 .hidden(game.getHidden() == null ? 0 : game.getHidden())
+                .isVerified(game.getIsVerified() == null ? 0 : game.getIsVerified())
                 .creatorName(creatorName)
                 .creatorAvatar(creatorAvatar)
                 .creatorGender(creatorGender)

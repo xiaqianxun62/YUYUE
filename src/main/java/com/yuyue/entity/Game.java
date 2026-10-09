@@ -63,6 +63,9 @@ public class Game {
     /** 1=已隐藏（不在首页列表显示） */
     private Integer hidden;
 
+    /** 1=仅认证用户可见，0=所有人可见 */
+    private Integer isVerified;
+
     @TableLogic
     private Integer deleted;
 

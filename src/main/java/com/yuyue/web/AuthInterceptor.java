@@ -48,13 +48,19 @@ public class AuthInterceptor implements HandlerInterceptor {
         @NonNull HttpServletRequest request, 
         @Nullable HttpServletResponse response, 
         @Nullable Object handler) {
-        // 官网首页未登录也要能读：积分榜、球局列表与详情（报名列表本身对外匿名）
+        // 公开接口也要尝试软鉴权（有 token 就解析用户身份，没 token 也不拦截）。
+        // 这样 /games 列表才能按当前用户 is_verified 状态过滤认证球局。
+        String auth = request.getHeader(HEADER);
+        boolean hasAuth = auth != null && auth.startsWith(PREFIX);
+
         if (isPublicRead(request)) {
+            if (hasAuth) {
+                trySoftAuth(auth.substring(PREFIX.length()));
+            }
             return true;
         }
 
-        String auth = request.getHeader(HEADER);
-        if (auth == null || !auth.startsWith(PREFIX)) {
+        if (!hasAuth) {
             log.debug("未登录访问: {} {}", request.getMethod(), request.getRequestURI());
             throw new BizException(ErrorCode.UNAUTHORIZED);
         }
@@ -80,6 +86,23 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
         UserContext.set(userId);
         return true;
+    }
+
+    /**
+     * 软鉴权：公开接口有 token 时尝试解析身份。
+     * 解析成功 → 写入 UserContext，让后端能识别当前用户状态；
+     * 解析失败（过期/黑名单/无效）→ 静默忽略，当作未登录处理。
+     */
+    private void trySoftAuth(String token) {
+        try {
+            // 登出黑名单：软鉴权也不认
+            Boolean blacklisted = redisTemplate.opsForSet().isMember(Constants.JWT_BLACKLIST, token);
+            if (Boolean.TRUE.equals(blacklisted)) return;
+            Long userId = jwtUtil.parse(token);
+            if (userId != null) UserContext.set(userId);
+        } catch (Exception ignored) {
+            // 公开接口，token 无效就当作没登录，不报错
+        }
     }
 
     /**
